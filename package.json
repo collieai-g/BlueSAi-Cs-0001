@@ -1,0 +1,14 @@
+{
+  "name": "blueprint-customer-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "藍圖客服：簡明回覆、已確認知識、人工接手與 Evolution API 接駁",
+  "engines": { "node": ">=24.22.0 <25" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "check": "node --check src/index.js && node --check src/server.js && node --check src/engine.js && node --check src/agent.js && node --check src/store.js && node --check public/app.js"
+  }
+}
