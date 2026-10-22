@@ -8,6 +8,7 @@ import { createAgent } from './agent.js';
 import { createEvolution } from './evolution.js';
 import { Engine } from './engine.js';
 import { createApp } from './server.js';
+import identity from '../agent.json' with { type: 'json' };
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 if (major !== 24 || minor < 22) throw new Error('請使用 Node.js 24.22 或更新的 24.x 版本。');
@@ -41,7 +42,7 @@ try {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 不正確。');
   server.listen(port, host, () => {
     engine.start();
-    console.log(`藍圖客服：http://${host}:${port}`);
+    console.log(`${identity.name} (${identity.id})：http://${host}:${port}`);
     console.log(env.ADMIN_TOKEN ? '請使用你設定的 ADMIN_TOKEN 登入。' : `管理員密碼保存在 ${tokenPath}；請在本機讀取，勿貼到聊天或提交至 Git。`);
     console.log(agent.configured ? 'AI：已設定 OpenAI（尚未驗證帳戶連線）。' : 'AI：離線示範模式，未連接語言模型。');
     console.log(evolution.deliveryEnabled ? '真實發送開關已開啟；仍需完成介面設定。' : '真實發送已關閉。');

@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="zh-Hant">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>藍圖客服</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlueSAI-客服</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
 <body>
 <section id="login" class="login-card">
-  <div class="brand"><span class="mark">藍</span><span>藍圖客服</span></div>
-  <h1>登入你的客服工作室</h1><p class="muted">用簡單說話，提供清楚的服務。</p>
+  <div class="brand"><span class="mark">B</span><span>BlueSAI-客服</span></div>
+  <p class="help">Agent 編號：BlueSAi-Cs-#0001</p><h1>登入你的客服工作室</h1><p class="muted">用簡單說話，提供清楚的服務。</p>
   <form id="login-form"><label for="token">管理員密碼</label><input id="token" type="password" autocomplete="current-password" required><p class="help">首次啟動時，終端機會顯示密碼檔案的位置。</p><button class="primary" type="submit">登入</button></form>
 </section>
 <div id="app" hidden>
-  <header class="app-header"><div class="brand"><span class="mark">藍</span><span>藍圖客服</span><span id="engine-tag" class="badge"></span></div><button id="logout" class="quiet">登出</button></header>
+  <header class="app-header"><div class="brand"><span class="mark">B</span><span>BlueSAI-客服</span><span id="engine-tag" class="badge"></span></div><button id="logout" class="quiet">登出</button></header>
   <nav aria-label="主要功能"><button data-page="inbox">對話</button><button data-page="teach" aria-current="page">教客服</button><button data-page="settings">設定</button></nav>
   <main>
     <section id="page-teach">
@@ -67,9 +67,9 @@
         <label class="radio"><input type="radio" name="mode" value="auto"><span><strong>自動回覆已知問題</strong><small>有已確認依據才自動回答。追問及需人工決定的內容仍會留待處理。</small></span></label>
         <label for="handoff-contact">客人可以怎樣聯絡真人？</label><input id="handoff-contact" maxlength="300" placeholder="例如：致電店舖或留待此對話的客服接手">
         <p class="help">待人工處理的查詢會留在「對話」。第一版沒有額外電郵或手機推送通知，請安排人員查看。</p><button class="primary" type="submit">儲存設定</button>
-      </form><section class="panel"><h2>連接狀態</h2><dl id="connection-status"></dl><p class="notice">設定完成不代表已驗證連線。正式發送前，請先用測試帳號核對收發及人工接手。</p><p class="help">API 密鑰由管理員在伺服器設定，這個畫面不會顯示密鑰。</p><hr><p class="help">訊息連接採用 <a href="https://github.com/evolution-foundation/evolution-api" target="_blank" rel="noreferrer">Evolution API</a>。本產品使用獨立設計的客服介面。</p></section></div>
+      </form><section class="panel"><h2>你的客服</h2><dl><dt>名稱</dt><dd>BlueSAI-客服</dd><dt>Agent 編號</dt><dd>BlueSAi-Cs-#0001</dd></dl><hr><h2>連接狀態</h2><dl id="connection-status"></dl><p class="notice">設定完成不代表已驗證連線。正式發送前，請先用測試帳號核對收發及人工接手。</p><p class="help">API 密鑰由管理員在伺服器設定，這個畫面不會顯示密鑰。</p><hr><p class="help">訊息連接採用 <a href="https://github.com/evolution-foundation/evolution-api" target="_blank" rel="noreferrer">Evolution API</a>。本產品使用獨立設計的客服介面。</p></section></div>
     </section>
-  </main><footer>藍圖客服 · 簡單說清楚，認真做好服務。</footer>
+  </main><footer>BlueSAI-客服 · BlueSAi-Cs-#0001<br>簡單說清楚，認真做好服務。</footer>
 </div>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 </body></html>

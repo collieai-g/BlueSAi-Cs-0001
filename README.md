@@ -1,4 +1,8 @@
-# 藍圖客服
+# BlueSAI-客服
+
+**Agent 編號：`BlueSAi-Cs-#0001` · MIT 開源授權**
+
+項目名稱為「BlueSAI-客服」，完整編號保留大小寫及 `#`。GitHub 倉庫名稱使用 `BlueSAi-Cs-0001`，身份資料記錄於 [agent.json](agent.json)。
 
 一個可在本機運行的 AI 客服起步版本。商戶以普通說話設定服務，客服用簡短、專業的方式回答；不知道的事不預填，重要決定交給真人。
 
@@ -23,8 +27,8 @@
 需要 **Node.js 24.22 或更新的 24.x**。使用內建 HTTP、SQLite、測試工具，沒有第三方執行依賴，也沒有前端建置步驟。
 
 ```sh
-git clone https://github.com/collieai-g/1234.git
-cd 1234
+git clone https://github.com/collieai-g/BlueSAi-Cs-0001.git
+cd BlueSAi-Cs-0001
 npm start
 ```
 
@@ -54,4 +58,6 @@ npm run check
 
 接口設計參考其 `fa09d37892cdbb1d65a250155d293d92230c5b30` 原始碼；當時 package 版本為 2.3.7。這不是對特定容器或帳戶已完成整合測試的聲明。Evolution 的授權包含額外條件，請依實際使用版本核對其 [LICENSE](https://github.com/evolution-foundation/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/LICENSE)。管理員設定頁保留使用通知。
 
-本倉庫暫未指定對外開源授權；私人倉庫的可見性亦不會由程式修改。不要把「可讀原始碼」當成已取得任何第三方商標或服務權利。
+本倉庫的原創程式及文件採用 [MIT License](LICENSE)，允許使用、修改、分發及商業使用，須保留授權與版權聲明。Evolution API 等獨立服務仍依各自授權；本授權不授予第三方商標或服務權利。
+
+`package.json` 的 `private: true` 只防止意外發佈至 npm，不影響本項目的開源授權或 GitHub 公開狀態。歡迎依 [參與指引](CONTRIBUTING.md) 提交改進。

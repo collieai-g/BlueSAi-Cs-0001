@@ -1,9 +1,12 @@
 {
-  "name": "blueprint-customer-service",
+  "name": "bluesai-cs-0001",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "藍圖客服：簡明回覆、已確認知識、人工接手與 Evolution API 接駁",
+  "description": "BlueSAI-客服：簡明回覆、已確認知識、人工接手與 Evolution API 接駁",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/collieai-g/BlueSAi-Cs-0001.git" },
+  "bugs": { "url": "https://github.com/collieai-g/BlueSAi-Cs-0001/issues" },
   "engines": { "node": ">=24.22.0 <25" },
   "scripts": {
     "start": "node src/index.js",

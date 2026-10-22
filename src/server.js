@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { ServiceError } from './engine.js';
 import { normalizeEvent } from './evolution.js';
+import identity from '../agent.json' with { type: 'json' };
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -85,7 +86,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if (path === '/api/state' && method === 'GET') return json(res, 200, {
           profile: store.value('profile'), settings: store.value('settings'), knowledge: store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
-          conversations: store.conversations(), runtime: runtime(),
+          conversations: store.conversations(), runtime: runtime(), identity,
         });
         if (path === '/api/profile' && method === 'PUT') {
           const input = await body(req);

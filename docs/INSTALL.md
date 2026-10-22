@@ -4,6 +4,8 @@
 
 Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl+C` 停止。預設只監聽 `127.0.0.1:3100`。沒有第三方依賴，毋須 `npm install`。
 
+本項目名稱為 **BlueSAI-客服**，Agent 編號為 `BlueSAi-Cs-#0001`。為了保留既有設定與對話，改名後仍使用原本的 `.blueprint-service` 資料目錄及 `BLUEPRINT_DATA_DIR` 環境變數，毋須搬移資料。
+
 若要設定選項，將 `.env.example` 複製成 `.env`；程式在啟動時讀取，已有環境變數優先。修改後須重啟。
 
 | 變數 | 說明 |
