@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { ServiceError } from './engine.js';
 import { normalizeEvent } from './evolution.js';
+import { createDotTasks } from './dot-tasks.js';
 import identity from '../agent.json' with { type: 'json' };
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
@@ -33,6 +34,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   if (adminToken.length < 32) throw new Error('ADMIN_TOKEN must contain at least 32 characters');
   if (webhookSecret && webhookSecret.length < 32) throw new Error('WEBHOOK_SECRET must contain at least 32 characters');
   const sessions = new Map(); const failures = new Map();
+  const dotTasks = workbench ? createDotTasks(store) : null;
   if(!/^[a-zA-Z0-9_]+$/.test(sessionCookieName))throw new Error('Invalid cookie name');
   const cookie = (value, age) => `${sessionCookieName}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cookieSecure ? '; Secure' : ''}`;
   const runtime = () => ({ agent: engine.agent.configured ? 'openai' : 'offline', evolutionConfigured: engine.evolution.configured,
@@ -84,6 +86,18 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if (path === '/api/logout' && method === 'POST') {
           sessions.delete(session); res.setHeader('Set-Cookie', cookie('', 0)); return json(res, 200, { ok: true });
+        }
+        if (dotTasks && path === '/api/workbench/dot/tasks') {
+          if (method === 'GET') return json(res, 200, { tasks: dotTasks.list() });
+          if (method === 'POST') {
+            const result = dotTasks.create(await body(req));
+            return json(res, result.created ? 201 : 200, { task: result.task });
+          }
+        }
+        const dotTask = dotTasks && path.match(/^\/api\/workbench\/dot\/tasks\/([\w-]+)$/);
+        if (dotTask) {
+          if (method === 'GET') return json(res, 200, { task: dotTasks.get(dotTask[1]) });
+          if (method === 'PUT') return json(res, 200, { task: dotTasks.update(dotTask[1], await body(req)) });
         }
         if (workbench && path === '/api/workbench' && method === 'GET') return json(res,200,{
           profile:store.value('profile'),settings:store.value('settings'),knowledge:store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
@@ -204,6 +218,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
       }
       const assets = { '/': [workbench?'workbench.html':'index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
         '/workbench.js':['workbench.js','text/javascript; charset=utf-8'], '/workbench-api.js':['workbench-api.js','text/javascript; charset=utf-8'], '/workbench.css':['workbench.css','text/css; charset=utf-8'],
+        '/agent-handoff.js':['agent-handoff.js','text/javascript; charset=utf-8'],
         '/vendor/blueprint-style.css': ['vendor/blueprint-style.css','text/css; charset=utf-8'],
         '/vendor/blueprint-studio.css': ['vendor/blueprint-studio.css','text/css; charset=utf-8'], '/brand.svg': ['brand.svg','image/svg+xml'] };
       if (method === 'GET' && assets[path]) {
