@@ -14,6 +14,8 @@
 
 後續開發以 `f4fe1fd` 為基線，先完成 **[可靠交接流程](docs/RELIABLE_HANDOFF.md)**：持久 30 秒期限、模型等待期間獨立轉人工、跨重啟恢復與遲到答案攔截。本地交接工作已保存不代表私人 WhatsApp 已收到通知；完整階段安排見 [開發計劃](docs/DEVELOPMENT_PLAN.md)。
 
+可靠交接已透過 [PR #1](https://github.com/collieai-g/BlueSAi-Cs-0001/pull/1) 合併。下一階段採用 **[按鍵呼叫 Codex／DOT](docs/CODEX_DOT_HANDOFF.md)**：在既有對話處理任務，毋須額外模型金鑰；工作台準備內容、提供原生交接並保存待核對結果。自動背景事件與對客發送另行驗收。
+
 ## 已有功能
 
 - 本機插件工作台：客服入口卡片、紅／綠連線狀態、同一卡片內三個分頁、行業及六種回覆模式、對話訓練與待確認記憶、模型及 WhatsApp 接駁介面。見 [本機版功能與邊界](docs/LOCAL_WORKBENCH.md)。

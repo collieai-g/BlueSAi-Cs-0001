@@ -18,6 +18,9 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
     const live=Boolean(window.csBackend), state={screen:'list',tab:'basic',showNumber:true,cardPadding:24,replyMode:'industry',previewConnected:false};
     let snapshot={profile:{name:'',industry:'',service:'',instructions:'',tone:'friendly'},settings:{handoffContact:''},knowledge:[],training:[],connections:{ai:{status:'unconfigured',model:''},whatsapp:{status:'unconfigured'}}};
     let busy=false;
+    let dotTasks=[],selectedTask=null,renderedTaskId=null,taskDraftKey=null;
+    let taskReadLease=null,taskReadEpoch=0;
+    const resultDrafts=new Map(),demoTasks=[];
     const form=find('[data-config-form]'), value=(name)=>form.elements.namedItem(name).value;
     const hints={'':'先講答案，再講必要條件。每次只問一個重點。','零售與網店':'先了解客人想買甚麼。價錢、送貨及退換安排，只用已確認的資料。','餐飲':'先了解客人的用餐需要。菜式、價錢、致敏原及訂位安排，沒有資料就交給真人確認。','美容與預約':'先問所需服務。價錢、療程及可約時間，沒有確認就不要承諾。','專業服務':'先了解客人的目的。服務範圍、報價及完成時間，需要已確認的資料。','其他':'先講答案，再講必要條件。每次只問一個重點。'};
     const replyModes={concise:'先直接回答問題，再補充必要條件。盡量用一至三句說清楚，保留重要限制。',friendly:'語氣親切自然，用簡單易明的說話。保持專業，不用幼稚稱呼或過多表情符號。',professional:'語氣禮貌、簡潔、正式。清楚交代已確認的資訊，不作未經確認的承諾。',needs:'先了解客人的目的。資料不足時，每次只問一個必要問題，再提出合適的下一步。',steps:'需要操作時，按次序逐步說明。每一步只做一件事，用短句寫清楚。'};
@@ -34,13 +37,54 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
       async clearAI(){snapshot.connections.ai.status='unconfigured';},
       async whatsapp(){snapshot.connections.whatsapp.status='preview';return{preview:true,message:'二維碼位置示意。沒有連接 WhatsApp。'};},
       async checkWhatsApp(){return{status:'preview',message:'設計稿沒有實際連線，請在本機版測試。'};},
-      async clearWhatsApp(){snapshot.connections.whatsapp.status='unconfigured';}
+      async clearWhatsApp(){snapshot.connections.whatsapp.status='unconfigured';},
+      async dotTasks(){return{tasks:demoTasks};},
+      async dotTask(id){const task=demoTasks.find(x=>x.id===id);if(!task)throw new Error('找不到任務。');return{task};},
+      async createDotTask({instruction,idempotencyKey}){let task=demoTasks.find(x=>x.idempotencyKey===idempotencyKey);if(!task){const id='preview-'+Date.now(),verificationCode='PREVIEW';const context={profile:snapshot.profile,facts:snapshot.knowledge.filter(x=>x.approved).map(x=>({...x,expiresAt:x.expires_at??null}))};task={id,instruction,idempotencyKey,status:'prepared',version:1,createdAt:Date.now(),updatedAt:Date.now(),revision:1,verificationCode,contextStale:false,snapshot:context,resultText:null,prompt:'【設計預覽任務】\n任務：'+id+'\n要求：'+instruction+'\n只整理草稿，不發送客戶訊息。\n已儲存的商戶資料：\n'+JSON.stringify(context,null,2)};demoTasks.unshift(task);}return{task};},
+      async updateDotTask(id,input){const task=demoTasks.find(x=>x.id===id);if(!task)throw new Error('找不到任務。');if(task.version!==input.expectedVersion)throw new Error('任務已更新，請重新讀取。');task.status=input.action==='save_result'?'result_saved':input.action==='cancel'?'cancelled':input.action;if(input.result)task.resultText=input.result.text;task.version++;task.updatedAt=Date.now();return{task};}
     };
     const backend=window.csBackend||demo;
     function restore(saved){const v=saved?.privateContent||saved?.modelContent||saved;if(!v||v.prototype!=='customer-agent-card')return;if(['list','config'].includes(v.screen))state.screen=v.screen;if(['basic','training','connect'].includes(v.tab))state.tab=v.tab;if(v.tab==='trial')state.tab='basic';if(v.tab==='data')state.tab='training';if(typeof v.showNumber==='boolean')state.showNumber=v.showNumber;if(v.replyMode==='industry'||Object.hasOwn(replyModes,v.replyMode))state.replyMode=v.replyMode;if(typeof v.previewConnected==='boolean')state.previewConnected=v.previewConnected;}
     function render(){all('[data-screen]').forEach(x=>x.hidden=x.dataset.screen!==state.screen);all('[data-panel]').forEach(x=>x.hidden=x.dataset.panel!==state.tab);all('[data-tab]').forEach(x=>x.setAttribute('aria-selected',String(x.dataset.tab===state.tab)));find('[data-breadcrumb]').textContent=state.screen==='list'?'Agent 工作台':'Agent 工作台 / 客服 AI';find('[data-agent-code]').hidden=!state.showNumber;root.style.setProperty('--cs-card-padding',state.cardPadding+'px');paintSuggestion();paintConnection();}
     function remember(){const value={prototype:'customer-agent-card',screen:state.screen,tab:state.tab,showNumber:state.showNumber,replyMode:state.replyMode,previewConnected:state.previewConnected};if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:value,privateContent:null}).catch(()=>{});}
     function report(text,error=false){const el=find('[data-feedback]');el.textContent=text;el.dataset.error=String(error);}
+    const taskStatusNames={prepared:'待交給智能 Agent',copied:'已複製 · 待處理',opened:'瀏覽器已接受 · 待你送出',host_submitted:'已交給目前 AI 對話',result_saved:'草稿已保存 · 待核對',cancelled:'已取消'};
+    const taskExpired=task=>!task?.snapshot||!Array.isArray(task.snapshot.facts)||task.snapshot.facts.some(fact=>fact.expiresAt!=null&&(!Number.isFinite(fact.expiresAt)||fact.expiresAt<=Date.now()));
+    const taskClosed=task=>!task||task.contextStale||taskExpired(task)||['result_saved','cancelled'].includes(task.status);
+    function invalidateTaskRead(){taskReadLease=null;taskReadEpoch++;}
+    function taskReadFresh(){return Boolean(selectedTask&&taskReadLease&&taskReadLease.id===selectedTask.id&&taskReadLease.version===selectedTask.version&&taskReadLease.epoch===taskReadEpoch&&Date.now()-taskReadLease.at<5000&&document.visibilityState!=='hidden'&&document.hasFocus?.()!==false&&!taskClosed(selectedTask));}
+    async function checkSelectedTask(){
+      if(!selectedTask)throw new Error('請先準備或選擇任務。');const id=selectedTask.id,epoch=taskReadEpoch;const task=(await backend.dotTask(id)).task;
+      if(selectedTask?.id!==id)throw new Error('頁面已選擇另一個任務，請重新確認。');selectedTask=task;taskReadLease=epoch===taskReadEpoch?{id,version:task.version,epoch,at:Date.now()}:null;paintTasks();
+      if(taskClosed(task))throw new Error('任務資料已更新或過期，請準備新任務。');if(!taskReadLease)throw new Error('核對期間資料有更新，請再核對一次。');return task;
+    }
+    function taskNotice(text){find('[data-dot-action-status]').textContent=text;}
+    function paintTasks(){
+      const picker=find('[data-dot-task-picker]'),choices=selectedTask&&!dotTasks.some(task=>task.id===selectedTask.id)?[selectedTask,...dotTasks]:dotTasks;picker.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=choices.length?'選擇任務':'尚未準備任務';picker.append(empty);
+      for(const task of choices){const option=document.createElement('option');option.value=task.id;option.textContent=(taskStatusNames[task.status]||'狀態未確認')+' · '+task.instruction.slice(0,40);picker.append(option);}picker.value=selectedTask?.id||'';
+      find('[data-dot-task-detail]').hidden=!selectedTask;if(!selectedTask)return;
+      const changed=renderedTaskId!==selectedTask.id;find('[data-dot-task-meta]').textContent='任務 '+selectedTask.id;find('[data-dot-task-status]').textContent=taskStatusNames[selectedTask.status]||'狀態未確認';find('[data-dot-task-stale]').hidden=!selectedTask.contextStale&&!taskExpired(selectedTask);find('[data-dot-prompt]').value=selectedTask.prompt;
+      for(const name of ['call','copy','cancel'])find('[data-dot-'+name+']').disabled=taskClosed(selectedTask);
+      for(const field of find('[data-dot-result-form]').elements)field.disabled=taskClosed(selectedTask);
+      if(changed){find('[data-dot-result-form]').elements.text.value=resultDrafts.get(selectedTask.id)||'';taskNotice(selectedTask.status==='opened'?'瀏覽器曾接受交接要求；未能確認任務已送出或處理。':selectedTask.status==='host_submitted'?'任務已交給目前 AI 對話；仍未收到處理結果。':selectedTask.status==='result_saved'?'回傳草稿已保存，請核對內容。':'準備好後，按「呼叫 Codex／DOT」，在原生介面檢查並送出。');}
+      find('[data-dot-saved-result]').hidden=!selectedTask.resultText;find('[data-dot-result-text]').textContent=selectedTask.resultText||'';renderedTaskId=selectedTask.id;
+    }
+    async function refreshTasks(){const result=await backend.dotTasks();dotTasks=result.tasks||[];if(selectedTask){const id=selectedTask.id;try{const task=(await backend.dotTask(id)).task;if(selectedTask?.id===id)selectedTask=task;}catch(error){if(error.status===404&&selectedTask?.id===id)selectedTask={...selectedTask,contextStale:true};else throw error;}}paintTasks();}
+    async function updateTask(action,result){
+      if(!selectedTask)throw new Error('請先準備或選擇任務。');const taskId=selectedTask.id;
+      try{selectedTask=(await backend.updateDotTask(taskId,{action,expectedVersion:selectedTask.version,...(result?{result}:{})})).task;await refreshTasks();return selectedTask;}
+      catch(error){if(error.status===409){selectedTask=(await backend.dotTask(taskId)).task;await refreshTasks();throw new Error('任務或資料已更新，已讀取最新狀態。請核對後再操作。');}throw error;}
+    }
+    function setupAgentBridge(){
+      if(!live)return;const bridge=window.csAgentBridge;find('[data-dot-support]').textContent=bridge?.describe?.()||'此瀏覽器未提供直接呼叫功能，可複製任務交給目前智能 Agent。';
+      bridge?.registerTools?.({
+        getSelectedTask:()=>selectedTask,
+        readTask:async id=>{const task=(await backend.dotTask(id)).task;if(selectedTask?.id!==id)throw new Error('頁面已選擇另一個任務，請重新確認。');selectedTask=task;paintTasks();return task;},
+        saveResult:async(id,expectedVersion,result)=>{const task=(await backend.updateDotTask(id,{action:'save_result',expectedVersion,result})).task;if(selectedTask?.id===id)selectedTask=task;await refreshTasks();return task;},
+        onError:async error=>{if(error.status===409&&selectedTask)await refreshTasks();report(error.message||'操作未完成。',true);},
+      });
+      find('[data-dot-support]').textContent=bridge?.describe?.()||find('[data-dot-support]').textContent;
+    }
     function message(container,role,text,sources=[]){const box=document.createElement('div');box.className='bp-message'+(role==='user'?' bp-customer':'');const who=document.createElement('small');who.textContent=role==='user'?'你':role;const copy=document.createElement('span');copy.textContent=text;box.append(who,copy);if(sources.length){const source=document.createElement('div');source.className='bp-source';source.textContent='用到的記憶：'+sources.map(x=>x.title).join('、');box.append(source);}container.append(box);}
     const statusNames={unconfigured:'未接駁',configured:'已填資料 · 未測試',connected:'連線已驗證',preview:'設計示例',open:'WhatsApp 已連接',close:'未連接手機',connecting:'等待掃碼',unknown:'狀態未確認',error:'連線未成功'};
     function paintData(fill=false){
@@ -61,8 +105,8 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
       find('[data-runtime-label]').textContent=live?(ai.status==='connected'?'AI 已連接 · 本機實測':'本機實測 · 離線模式'):'設計預覽';
       if(live){find('[data-training-mode]').textContent=ai.status==='connected'?'AI 會參考最近的訓練對話整理記憶。你確認後才用來回答客戶。':'未接駁 AI：會將你教的內容原文存為待確認記憶。';}
     }
-    async function refresh(fill=false){snapshot=await backend.load();paintData(fill);}
-    async function run(button,fn){if(busy)return;busy=true;const original=button?.textContent;if(button){button.disabled=true;button.textContent='處理中…';}try{await fn();}catch(e){report(e.message||'操作未完成，請再試。',true);}finally{busy=false;if(button){button.disabled=false;button.textContent=original;}}}
+    async function refresh(fill=false){invalidateTaskRead();snapshot=await backend.load();paintData(fill);await refreshTasks();}
+    async function run(button,fn){if(busy)return;busy=true;const original=button?.textContent;if(button){button.disabled=true;button.textContent='處理中…';}try{await fn();}catch(e){report(e.message||'操作未完成，請再試。',true);}finally{busy=false;if(button){button.disabled=false;button.textContent=original;}if(selectedTask)paintTasks();}}
     restore(window.openai?.widgetState);render();
     find('[data-open]').addEventListener('click',()=>{state.screen='config';render();remember();});
     find('[data-back]').addEventListener('click',()=>{state.screen='list';render();remember();});
@@ -73,6 +117,32 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
     find('[data-use-hint]').addEventListener('click',()=>{const field=form.elements.instructions;const next=[field.value,selectedHint()].filter(Boolean).join('\n');if(next.length>2000){report('指令太長，請先整理現有內容再加入。',true);return;}field.value=next;report('已加入所選模式，按「儲存基本設定」採用。');});
     find('[data-teaching-example]').addEventListener('click',()=>{find('[data-training-form]').elements.text.value='【示範資料，請改成你的實際安排】\n客人問：星期日有開門嗎？\n客服答：星期日休息，星期一至六上午十時至晚上七時營業。';report('已填入示例，尚未儲存。請先改成你的實際安排。');});
     find('[data-training-form]').addEventListener('submit',event=>{event.preventDefault();const field=event.currentTarget.elements.text;run(event.submitter,async()=>{await backend.train(field.value.trim());field.value='';await refresh();report('請檢查剛整理的記憶，再確認採用。');});});
+    find('[data-dot-task-form]').elements.instruction.addEventListener('input',()=>{taskDraftKey=null;});
+    find('[data-dot-task-form]').addEventListener('submit',event=>{event.preventDefault();const instruction=event.currentTarget.elements.instruction.value.trim();run(event.submitter,async()=>{if(!instruction)throw new Error('請寫下想處理的任務。');taskDraftKey ||= globalThis.crypto?.randomUUID?.()||('task-'+Date.now()+'-'+Math.random().toString(36).slice(2));const result=await backend.createDotTask({instruction,idempotencyKey:taskDraftKey});taskDraftKey=null;selectedTask=result.task;await refreshTasks();find('[data-dot-prompt-details]').open=true;taskNotice(live?'任務已準備，請先檢查內容，再交給智能 Agent。':'已準備設計示例，沒有呼叫智能 Agent。');report(live?'任務已儲存在這部電腦。':'已準備設計示例。');});});
+    find('[data-dot-task-picker]').addEventListener('change',event=>{if(busy){event.currentTarget.value=selectedTask?.id||'';return;}invalidateTaskRead();if(selectedTask)resultDrafts.set(selectedTask.id,find('[data-dot-result-form]').elements.text.value);const id=event.currentTarget.value;run(null,async()=>{selectedTask=id?(await backend.dotTask(id)).task:null;paintTasks();});});
+    find('[data-dot-refresh]').addEventListener('click',event=>run(event.currentTarget,async()=>{invalidateTaskRead();await refreshTasks();if(selectedTask&&!taskClosed(selectedTask)){await checkSelectedTask();taskNotice('最新任務已核對。請檢查內容，再按「呼叫 Codex／DOT」。');}else taskNotice('已重新讀取任務；未確認已送出或已處理。');}));
+    find('[data-dot-call]').addEventListener('click',event=>{
+      if(busy)return;if(taskClosed(selectedTask)){paintTasks();taskNotice('任務已結束或資料已更新／過期，請準備新任務。');return;}if(!live){taskNotice('設計示例：正式版會交給目前智能 Agent。這裡沒有送出任務。');return;}
+      if(!taskReadFresh()){run(event.currentTarget,async()=>{await checkSelectedTask();taskNotice('最新任務已核對。請檢查內容，再按一次「呼叫 Codex／DOT」開啟編輯器。');});return;}
+      invalidateTaskRead();
+      find('[data-dot-prompt-details]').open=true;const target=find('[data-dot-prompt]');let request;
+      try{request=window.csAgentBridge?.invoke(selectedTask,target);}catch(error){taskNotice(error.message||'未能開啟，請使用「複製任務」。');return;}
+      if(!request){taskNotice('未能直接呼叫，請按「複製任務」。');return;}
+      if(request.kind==='annotation'){
+        if(!request.accepted){taskNotice('瀏覽器未接受開啟要求。你可以使用「複製任務」。');return;}
+        run(event.currentTarget,async()=>{await updateTask('opened');taskNotice('瀏覽器已接受交接要求。請在原生介面檢查並送出；目前未確認已送出或已處理。');});return;
+      }
+      run(event.currentTarget,async()=>{const accepted=await request.promise;if(accepted===false){taskNotice('請選取上方任務內容並複製，交給目前智能 Agent。');return;}await updateTask(request.kind==='host'?'host_submitted':'copied');taskNotice(request.kind==='host'?'任務已交給目前 AI 對話，等待回傳草稿。':'任務已複製。請貼到目前 Codex／DOT 對話，檢查後送出。');});
+    });
+    find('[data-dot-copy]').addEventListener('click',event=>{if(taskClosed(selectedTask)){paintTasks();taskNotice('任務已結束或資料已更新／過期，請準備新任務。');return;}if(!live){taskNotice('設計示例：可在本機版複製任務。');return;}find('[data-dot-prompt-details]').open=true;run(event.currentTarget,async()=>{const task=await checkSelectedTask();invalidateTaskRead();if(!await window.csAgentBridge?.copy(find('[data-dot-prompt]'),task)){taskNotice('最新任務已核對。請選取上方內容並複製，交給目前智能 Agent。');return;}await updateTask('copied');taskNotice('最新任務已核對並複製，尚未送出。請貼到目前智能 Agent 對話。');});});
+    find('[data-dot-cancel]').addEventListener('click',event=>run(event.currentTarget,async()=>{await updateTask('cancel');taskNotice('本機任務已取消。已交給其他對話的內容仍需由你在該對話處理。');}));
+    find('[data-dot-result-form]').elements.text.addEventListener('input',event=>{if(selectedTask)resultDrafts.set(selectedTask.id,event.target.value);});
+    find('[data-dot-result-form]').addEventListener('submit',event=>{event.preventDefault();const text=event.currentTarget.elements.text.value.trim();run(event.submitter,async()=>{if(!text)throw new Error('請貼上處理結果。');const task=selectedTask;if(!task||taskClosed(task))throw new Error('這個任務目前不能保存新結果。');await updateTask('save_result',{taskId:task.id,verificationCode:task.verificationCode,text});resultDrafts.delete(task.id);taskNotice('回傳草稿已保存，仍需你核對；未採用為記憶，也未發送給客戶。');report('已保存待確認草稿。');});});
+    window.addEventListener('bluesai-workbench-change',invalidateTaskRead);
+    window.addEventListener('storage',event=>{if(event.key==='bluesai-workbench-change'){invalidateTaskRead();if(selectedTask)taskNotice('其他頁面有更新，呼叫前會重新核對任務。');}});
+    window.addEventListener('blur',invalidateTaskRead);
+    window.addEventListener('focus',invalidateTaskRead);
+    document.addEventListener('visibilitychange',invalidateTaskRead);
     find('[data-model-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const key=f.elements.apiKey.value;f.elements.apiKey.value='';find('[data-ai-result]').textContent='正在測試連線及模型回覆…';try{const result=await backend.model({model:f.elements.model.value,apiKey:key});find('[data-ai-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-ai-result]').textContent=e.message;throw e;}});});
     find('[data-disconnect-ai]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearAI();await refresh();find('[data-ai-result]').textContent='AI 接駁已清除。';report('已清除 AI 接駁，回到離線模式。');}));
     find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const args=Object.fromEntries(new FormData(f));f.elements.apiKey.value='';find('[data-wa-result]').textContent='正在向服務取得二維碼…';find('[data-qr-box]').hidden=true;try{const result=await backend.whatsapp(args);const holder=find('[data-qr-image]');holder.replaceChildren();find('[data-qr-box]').hidden=!result.qr&&!result.preview;if(result.qr){const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';holder.append(img);}else if(result.preview){holder.textContent='二維碼位置示意 · 不可掃描';}find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;await refresh();throw e;}});});
@@ -80,7 +150,7 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
     find('[data-wa-clear]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearWhatsApp();find('[data-qr-box]').hidden=true;find('[data-qr-image]').replaceChildren();await refresh();report('已清除本機接駁資料。如要移除手機裝置，請在 WhatsApp 的「已連結裝置」處理。');}));
     if(live){find('.bp-preview-label').textContent='本機實測 · 與測試工作室分開';find('.bp-bottom-caption').textContent='設定及訓練記憶只儲存在本機；WhatsApp 對客發送未開啟。';find('.bp-workspace strong').textContent='本機工作台';find('.bp-avatar').textContent='本';all('[data-secret]').forEach(x=>{x.disabled=false;x.placeholder='在本機輸入，重啟服務後需重新填寫';});find('[data-model-submit]').textContent='測試並接駁 AI';find('[data-wa-submit]').textContent='取得二維碼';find('[data-key-help]').textContent='金鑰只暫存在本機服務記憶體，不寫入磁碟；重啟服務後需重新填寫。';}else{find('[data-model-form]').noValidate=true;find('[data-whatsapp-form]').noValidate=true;}
     if(live){report('設定及訓練記憶會儲存在這部電腦。');find('[data-screen="list"] .bp-note').textContent='由卡片進入「配置客服」，設定回覆方式、訓練記憶及接駁渠道。';find('[data-screen="list"] .bp-page-title p').textContent='在同一個工作台設定、訓練及接駁你的客服。';find('[data-screen="list"] .bp-actions').hidden=true;}
-    try{await refresh(true);}catch(e){report(e.message,true);}
+    try{await refresh(true);setupAgentBridge();}catch(e){report(e.message,true);}
     window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState){restore(event.detail.globals.widgetState);render();}});
     if(globalThis.Tweak){const tweak=new Tweak({container:find('.bp-agent-card'),onChange:()=>{render();remember();}});tweak.addToggle(state,'showNumber',{label:'顯示 Agent 編號'});tweak.addSlider(state,'cardPadding',{label:'卡片留白',min:18,max:30,step:2,unit:'px'});if(!live)tweak.addToggle(state,'previewConnected',{label:'預覽已連接綠燈'});}
   })();

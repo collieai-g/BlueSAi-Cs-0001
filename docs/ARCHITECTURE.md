@@ -8,6 +8,8 @@
 
 以下描述 3100 客服服務與共用核心；後續工作以 [開發計劃](DEVELOPMENT_PLAN.md) 為準。工作室內提供卡片入口，客服執行器及後台獨立運行及部署。
 
+工作台另提供 [Codex／DOT 協作流程](CODEX_DOT_HANDOFF.md)：`src/dot-tasks.js` 保存不可變任務快照，`public/agent-handoff.js` 在按鍵事件內呼叫原生交接，並提供只限當前選定任務的網站工具。使用者沿用目前 AI 對話；這條路不需要額外模型金鑰。原生請求獲接受、使用者送出、Agent 執行及結果保存是不同狀態。保存的結果仍是待核對草稿，不進對客發送佇列。
+
 ## 實作選擇
 
 第一版將原設計落地為 Node.js 24、原生 JavaScript ES modules、SQLite 和靜態前端。省去套件安裝與建置，方便在 Windows／Linux 檢查。這是單商戶單程序的起步實作；大規模版本再遷移 PostgreSQL／工作佇列及租戶權限。

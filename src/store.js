@@ -48,7 +48,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
       const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
-      if (latest > 1) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest > 2) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
       if (latest < 1) {
         this.db.exec(`
           CREATE TABLE response_windows (
@@ -67,6 +67,19 @@ export class Store {
             reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);
         `);
         this.run('INSERT INTO schema_migrations VALUES (?,?)', 1, Date.now());
+      }
+      if (latest < 2) {
+        this.db.exec(`
+          CREATE TABLE dot_tasks (
+            id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
+            instruction TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('prepared','copied','opened','host_submitted','result_saved','cancelled')),
+            version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+            revision INTEGER NOT NULL, verification_code TEXT NOT NULL,
+            snapshot TEXT NOT NULL, prompt TEXT NOT NULL, result_text TEXT);
+          CREATE INDEX dot_tasks_newest ON dot_tasks(created_at DESC);
+        `);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 2, Date.now());
       }
     });
   }
