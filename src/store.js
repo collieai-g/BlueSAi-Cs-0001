@@ -37,9 +37,38 @@ export class Store {
       CREATE TABLE IF NOT EXISTS training_turns (
         id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
+    try { this.migrate(); } catch (error) { this.db.close(); throw error; }
     for (const [key, value] of Object.entries(defaults)) {
       this.run('INSERT OR IGNORE INTO config VALUES (?, ?)', key, JSON.stringify(value));
     }
+  }
+  migrate() {
+    // Additive migrations leave existing conversations, messages and profiles intact.
+    // In particular, legacy messages do not acquire retroactive response deadlines.
+    this.transaction(() => {
+      this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
+      const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
+      if (latest > 1) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest < 1) {
+        this.db.exec(`
+          CREATE TABLE response_windows (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            first_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            opened_at INTEGER NOT NULL, deadline_at INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending','submitted','waiting_customer','handed_off','cancelled')),
+            resolved_at INTEGER, reason TEXT);
+          CREATE UNIQUE INDEX response_windows_one_pending ON response_windows(conversation_id) WHERE status='pending';
+          CREATE INDEX response_windows_due ON response_windows(deadline_at) WHERE status='pending';
+          CREATE TABLE handoff_tasks (
+            id TEXT PRIMARY KEY,
+            window_id TEXT NOT NULL UNIQUE REFERENCES response_windows(id) ON DELETE CASCADE,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);
+        `);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 1, Date.now());
+      }
+    });
   }
   run(sql, ...args) { return this.db.prepare(sql).run(...args); }
   get(sql, ...args) { return this.db.prepare(sql).get(...args); }
