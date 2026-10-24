@@ -2,6 +2,8 @@
 
 歡迎提交問題或 Pull Request。請先閱讀 README.md、AGENTS.md 和 docs/ARCHITECTURE.md，了解第一版的範圍。
 
+本項目是為藍圖工作室設計的內置客服 AI 插件。涉及介面、卡片尺寸、移動或縮放時，須遵循 [插件設計規格](docs/BLUEPRINT_PLUGIN_DESIGN.md)，並區分已實作功能與待宿主整合的能力。
+
 1. 使用 Node.js 24.22+（24.x），從 main 建立分支。
 2. 用最小改動解決具體問題。介面用清楚、簡短、專業的繁體中文。
 3. 執行 `npm test` 及 `npm run check`；介面改動亦需核對手機與電腦版面。

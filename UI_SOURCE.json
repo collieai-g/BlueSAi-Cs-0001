@@ -4,6 +4,12 @@
   "version": "2.7.3",
   "license": "MIT",
   "normalization": "UTF-8, LF line endings",
+  "workspaceBehaviorReference": {
+    "commit": "d23d271f60cb32b208960e62fe03f771de5a2b8b",
+    "files": ["library_web/workspace.js", "library_web/style.css"],
+    "purpose": "Read-only reference for native card movement, resizing and grid limits; not copied or integrated",
+    "designContract": "docs/BLUEPRINT_PLUGIN_DESIGN.md"
+  },
   "copiedFiles": [
     {
       "source": "library_web/style.css",

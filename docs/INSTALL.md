@@ -1,5 +1,11 @@
 # 安裝與連接
 
+## 插件本機實測入口
+
+本項目定位為藍圖工作室內置客服 AI 插件。目前可執行 `npm run workbench` 在 `127.0.0.1:3101` 試用；完整步驟見 [LOCAL_WORKBENCH.md](LOCAL_WORKBENCH.md)。這不會安裝到測試工作室。宿主註冊、原生卡片移動／縮放與尺寸規則需按 [插件設計規格](BLUEPRINT_PLUGIN_DESIGN.md) 另外整合。
+
+下列安裝與發送說明適用於保留的 3100 客服服務；3101 工作台沒有對客發送 worker 或 webhook。
+
 ## 本機／開發
 
 Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl+C` 停止。預設只監聽 `127.0.0.1:3100`。沒有第三方依賴，毋須 `npm install`。

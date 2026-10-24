@@ -3,5 +3,9 @@
   "id": "BlueSAi-Cs-#0001",
   "version": "0.2.0",
   "repository": "https://github.com/collieai-g/BlueSAi-Cs-0001",
-  "license": "MIT"
+  "license": "MIT",
+  "productRole": "Blueprint Studio built-in customer-service AI plugin",
+  "host": "Blueprint Studio",
+  "integrationStatus": "local-workbench-preview; native host integration pending",
+  "designContract": "docs/BLUEPRINT_PLUGIN_DESIGN.md"
 }

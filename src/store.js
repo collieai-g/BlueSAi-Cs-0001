@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 
 export const defaults = {
-  profile: { name: '', service: '', instructions: '', tone: 'friendly' },
+  profile: { name: '', industry: '', service: '', instructions: '', tone: 'friendly' },
   settings: { mode: 'review', handoffContact: '' },
   revision: 1,
 };
@@ -34,6 +34,8 @@ export class Store {
         version INTEGER NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, target TEXT, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS training_turns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
     for (const [key, value] of Object.entries(defaults)) {
       this.run('INSERT OR IGNORE INTO config VALUES (?, ?)', key, JSON.stringify(value));

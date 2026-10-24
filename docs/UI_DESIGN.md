@@ -2,6 +2,12 @@
 
 版本：0.2.0，2026-10-24。
 
+## 最新插件介面
+
+BlueSAI-客服專為藍圖工作室的內置插件用途設計。最新入口是「AI → Agent 工作台」客服卡片；基本設定、訓練、接駁統一放在一張設定卡片內。詳細結構、原生縮放與移動、每種卡片固定最小／預設／最大尺寸、窄畫布例外及實作狀態，以 [BLUEPRINT_PLUGIN_DESIGN.md](BLUEPRINT_PLUGIN_DESIGN.md) 為準。
+
+本機 3101 版使用工作室外殼預覽插件，目前未接入宿主排版引擎。其介面來源為 `design/customer-agent-card-design.html`，由 `tools/build-workbench.py` 產生 `public/workbench.*`；不可只改產出檔案。下面記錄原有 3100 服務的共用資產與介面，供兼容維護。
+
 ## 參考來源
 
 採用 [Blueprint Studio Open Source v2.7.3](https://github.com/collieai-g/Blueprint-Studio-Open-Source/tree/ea20229b1bbdb5cb55f42456d4b962d66d6898e7) 的實際前端，固定於 commit `ea20229b1bbdb5cb55f42456d4b962d66d6898e7`。

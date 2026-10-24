@@ -3,15 +3,16 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "BlueSAI-客服：簡明回覆、已確認知識、人工接手與 Evolution API 接駁",
+  "description": "為藍圖工作室設計的內置客服 AI 插件：原生卡片介面、對話訓練與 Evolution API 接駁；目前提供獨立本機實測版",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/collieai-g/BlueSAi-Cs-0001.git" },
   "bugs": { "url": "https://github.com/collieai-g/BlueSAi-Cs-0001/issues" },
   "engines": { "node": ">=24.22.0 <25" },
   "scripts": {
     "start": "node src/index.js",
+    "workbench": "node src/workbench.js",
     "dev": "node --watch src/index.js",
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "check": "node --check src/index.js && node --check src/server.js && node --check src/engine.js && node --check src/agent.js && node --check src/store.js && node --check public/app.js"
+    "check": "node --check src/index.js && node --check src/server.js && node --check src/engine.js && node --check src/agent.js && node --check src/store.js && node --check public/app.js && node --check src/connections.js && node --check src/workbench.js && node --check public/workbench-api.js && node --check public/workbench.js"
   }
 }

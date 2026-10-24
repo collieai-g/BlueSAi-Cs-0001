@@ -1,0 +1,87 @@
+(() => {
+const icons = {
+  dashboard:['M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z'],
+  checklist:['M9 5h12 M9 12h12 M9 19h12 M3 5l1 1 2-3 M3 12l1 1 2-3 M3 19l1 1 2-3'],
+  folder:['M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'],
+  chat:['M21 11a8 8 0 0 1-8 8H7l-4 3V11a9 9 0 0 1 18 0Z','M7 10h10 M7 14h6'],
+  settings:['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8','m9 3-1 3-3 1-2 3 2 2-1 3 2 3h3l2 3 3-1 1-3 3-1 2-3-2-2 1-3-2-3h-3l-2-3Z'],
+  menu:['M4 6h16 M4 12h16 M4 18h16'], arrow:['M5 12h14 m-5-5 5 5-5 5'],
+  plus:['M12 5v14 M5 12h14'], inbox:['M4 4h16l2 12v4H2v-4Z','M2 16h6l2 3h4l2-3h6']
+};
+const names={'layout-grid':'dashboard','list-checks':'checklist','folder':'folder','message-circle':'chat','headset':'chat','settings':'settings','arrow-right':'arrow','arrow-left':'arrow','panel-left':'menu','archive':'inbox','file-text':'checklist'};
+document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[names[node.dataset.lucide]];if(!paths)return;const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');for(const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'1.7','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);for(const d of paths){const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',d);svg.append(path);}if(node.dataset.lucide==='arrow-left')svg.style.transform='rotate(180deg)';node.append(svg);});
+})();
+
+  (async()=>{
+    const root=document.getElementById('cs-card-design');
+    const find=s=>root.querySelector(s), all=s=>[...root.querySelectorAll(s)];
+    const live=Boolean(window.csBackend), state={screen:'list',tab:'basic',showNumber:true,cardPadding:24,replyMode:'industry',previewConnected:false};
+    let snapshot={profile:{name:'',industry:'',service:'',instructions:'',tone:'friendly'},settings:{handoffContact:''},knowledge:[],training:[],connections:{ai:{status:'unconfigured',model:''},whatsapp:{status:'unconfigured'}}};
+    let busy=false;
+    const form=find('[data-config-form]'), value=(name)=>form.elements.namedItem(name).value;
+    const hints={'':'先講答案，再講必要條件。每次只問一個重點。','零售與網店':'先了解客人想買甚麼。價錢、送貨及退換安排，只用已確認的資料。','餐飲':'先了解客人的用餐需要。菜式、價錢、致敏原及訂位安排，沒有資料就交給真人確認。','美容與預約':'先問所需服務。價錢、療程及可約時間，沒有確認就不要承諾。','專業服務':'先了解客人的目的。服務範圍、報價及完成時間，需要已確認的資料。','其他':'先講答案，再講必要條件。每次只問一個重點。'};
+    const replyModes={concise:'先直接回答問題，再補充必要條件。盡量用一至三句說清楚，保留重要限制。',friendly:'語氣親切自然，用簡單易明的說話。保持專業，不用幼稚稱呼或過多表情符號。',professional:'語氣禮貌、簡潔、正式。清楚交代已確認的資訊，不作未經確認的承諾。',needs:'先了解客人的目的。資料不足時，每次只問一個必要問題，再提出合適的下一步。',steps:'需要操作時，按次序逐步說明。每一步只做一件事，用短句寫清楚。'};
+    const selectedHint=()=>state.replyMode==='industry'?(hints[value('industry')]||hints['']):replyModes[state.replyMode];
+    function paintSuggestion(){find('[data-reply-mode]').value=state.replyMode;find('[data-industry-hint]').textContent=selectedHint();}
+    function paintConnection(){const ai=snapshot.connections.ai.status==='connected',wa=snapshot.connections.whatsapp.status==='open';const connected=live?(ai&&wa):state.previewConnected;find('[data-card-status]').dataset.connected=String(connected);find('[data-connection-label]').textContent=connected?'已連接':'未連接';find('[data-connection-detail]').textContent=live?`最近檢查：AI ${ai?'已連接':'未連接'} · WhatsApp ${wa?'已連接':'未連接'}`:connected?'設計示例：AI 模型及 WhatsApp 均已連接。':'AI 模型及 WhatsApp 尚未連接。';}
+    const category=text=>/回覆方式|語氣|先問|每次|不要|先回答/.test(text)?'style':/營業|開門|幾點|時間|星期|hours/i.test(text)?'hours':/幾錢|價錢|價格|收費|price/i.test(text)?'price':/退款|退貨/i.test(text)?'refund':'general';
+    const demo={
+      async load(){return snapshot;},
+      async saveProfile(p,s){snapshot.profile=p;snapshot.settings=s;},
+      async train(text){const id=String(Date.now());snapshot.knowledge.unshift({id,title:'這次教的內容',content:text,category:category(text),approved:0});snapshot.training.push({role:'user',content:text},{role:'assistant',content:'已原文整理成待確認記憶。請檢查內容，再確認採用。'});},
+      async memory(id,action,content,kind){const m=snapshot.knowledge.find(x=>x.id===id);if(action==='delete')snapshot.knowledge=snapshot.knowledge.filter(x=>x.id!==id);else if(action==='approve')m.approved=1;else{m.content=content;m.category=kind||m.category;m.approved=0;}},
+      async model(){snapshot.connections.ai.status='preview';return{message:'設計示例：模型連線已驗證。這裡沒有真正連接。'};},
+      async clearAI(){snapshot.connections.ai.status='unconfigured';},
+      async whatsapp(){snapshot.connections.whatsapp.status='preview';return{preview:true,message:'二維碼位置示意。沒有連接 WhatsApp。'};},
+      async checkWhatsApp(){return{status:'preview',message:'設計稿沒有實際連線，請在本機版測試。'};},
+      async clearWhatsApp(){snapshot.connections.whatsapp.status='unconfigured';}
+    };
+    const backend=window.csBackend||demo;
+    function restore(saved){const v=saved?.privateContent||saved?.modelContent||saved;if(!v||v.prototype!=='customer-agent-card')return;if(['list','config'].includes(v.screen))state.screen=v.screen;if(['basic','training','connect'].includes(v.tab))state.tab=v.tab;if(v.tab==='trial')state.tab='basic';if(v.tab==='data')state.tab='training';if(typeof v.showNumber==='boolean')state.showNumber=v.showNumber;if(v.replyMode==='industry'||Object.hasOwn(replyModes,v.replyMode))state.replyMode=v.replyMode;if(typeof v.previewConnected==='boolean')state.previewConnected=v.previewConnected;}
+    function render(){all('[data-screen]').forEach(x=>x.hidden=x.dataset.screen!==state.screen);all('[data-panel]').forEach(x=>x.hidden=x.dataset.panel!==state.tab);all('[data-tab]').forEach(x=>x.setAttribute('aria-selected',String(x.dataset.tab===state.tab)));find('[data-breadcrumb]').textContent=state.screen==='list'?'Agent 工作台':'Agent 工作台 / 客服 AI';find('[data-agent-code]').hidden=!state.showNumber;root.style.setProperty('--cs-card-padding',state.cardPadding+'px');paintSuggestion();paintConnection();}
+    function remember(){const value={prototype:'customer-agent-card',screen:state.screen,tab:state.tab,showNumber:state.showNumber,replyMode:state.replyMode,previewConnected:state.previewConnected};if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:value,privateContent:null}).catch(()=>{});}
+    function report(text,error=false){const el=find('[data-feedback]');el.textContent=text;el.dataset.error=String(error);}
+    function message(container,role,text,sources=[]){const box=document.createElement('div');box.className='bp-message'+(role==='user'?' bp-customer':'');const who=document.createElement('small');who.textContent=role==='user'?'你':role;const copy=document.createElement('span');copy.textContent=text;box.append(who,copy);if(sources.length){const source=document.createElement('div');source.className='bp-source';source.textContent='用到的記憶：'+sources.map(x=>x.title).join('、');box.append(source);}container.append(box);}
+    const statusNames={unconfigured:'未接駁',configured:'已填資料 · 未測試',connected:'連線已驗證',preview:'設計示例',open:'WhatsApp 已連接',close:'未連接手機',connecting:'等待掃碼',unknown:'狀態未確認',error:'連線未成功'};
+    function paintData(fill=false){
+      if(fill){for(const key of ['name','industry','service','instructions','tone'])form.elements.namedItem(key).value=snapshot.profile[key]|| (key==='tone'?'friendly':'');find('[data-model-form]').elements.model.value=snapshot.connections.ai.model||'';}
+      paintSuggestion();paintConnection();
+      const memories=find('[data-memories]');memories.replaceChildren();
+      if(!snapshot.knowledge.length){const p=document.createElement('p');p.className='bp-small bp-muted';p.textContent='還沒有記憶。由左邊的對話開始。';memories.append(p);}
+      for(const item of snapshot.knowledge){const box=document.createElement('article');box.className='bp-memory';const badge=document.createElement('span');badge.className='bp-badge';badge.textContent=item.approved?'已確認 · '+(item.category==='style'?'回覆方式':'商戶資料'):'待你確認';const text=document.createElement('p');text.textContent=item.content;const actions=document.createElement('div');actions.className='bp-actions';box.append(badge,text,actions);
+        const button=(label,fn,primary=false)=>{const b=document.createElement('button');b.type='button';b.className='bp-button cursor-interaction'+(primary?' bp-primary':'');b.textContent=label;b.addEventListener('click',()=>run(b,fn));actions.append(b);return b;};
+        if(!item.approved)button('確認採用',async()=>{await backend.memory(item.id,'approve');await refresh();report(live?'記憶已確認，可以用作客服回覆的依據。':'已在設計稿確認記憶。');},true);
+        button('修改',()=>{if(box.querySelector('textarea'))return;const editor=document.createElement('textarea');editor.maxLength=2000;editor.rows=4;editor.value=item.content;editor.setAttribute('aria-label','修改記憶內容');text.hidden=true;box.insertBefore(editor,actions);const kind=document.createElement('select');kind.setAttribute('aria-label','記憶類別');for(const [key,label] of Object.entries({general:'一般商戶資料',hours:'營業時間',price:'價格',refund:'退換安排',style:'回覆方式'})){const option=document.createElement('option');option.value=key;option.textContent=label;kind.append(option);}kind.value=item.category;box.insertBefore(kind,actions);button('儲存修改',async()=>{if(!editor.value.trim())throw new Error('請填寫記憶內容。');await backend.memory(item.id,'edit',editor.value.trim(),kind.value);await refresh();report('修改已儲存，請重新確認。');},true);editor.focus();});
+        button('刪除',async()=>{await backend.memory(item.id,'delete');await refresh();report('這條記憶已刪除。');});memories.append(box);
+      }
+      const usable=snapshot.knowledge.filter(x=>x.approved&&(!x.expires_at||x.expires_at>Date.now())).length;
+      find('[data-memory-count]').textContent=usable+' 條可用';
+      const chat=find('[data-training-chat]');chat.replaceChildren();for(const turn of snapshot.training)message(chat,turn.role==='user'?'user':'訓練助手',turn.content);
+      const ai=snapshot.connections.ai,wa=snapshot.connections.whatsapp;find('[data-ai-status]').textContent=statusNames[ai.status]||'狀態未確認';find('[data-wa-status]').textContent=statusNames[wa.status]||'狀態未確認';
+      find('[data-runtime-label]').textContent=live?(ai.status==='connected'?'AI 已連接 · 本機實測':'本機實測 · 離線模式'):'設計預覽';
+      if(live){find('[data-training-mode]').textContent=ai.status==='connected'?'AI 會參考最近的訓練對話整理記憶。你確認後才用來回答客戶。':'未接駁 AI：會將你教的內容原文存為待確認記憶。';}
+    }
+    async function refresh(fill=false){snapshot=await backend.load();paintData(fill);}
+    async function run(button,fn){if(busy)return;busy=true;const original=button?.textContent;if(button){button.disabled=true;button.textContent='處理中…';}try{await fn();}catch(e){report(e.message||'操作未完成，請再試。',true);}finally{busy=false;if(button){button.disabled=false;button.textContent=original;}}}
+    restore(window.openai?.widgetState);render();
+    find('[data-open]').addEventListener('click',()=>{state.screen='config';render();remember();});
+    find('[data-back]').addEventListener('click',()=>{state.screen='list';render();remember();});
+    all('[data-tab]').forEach(button=>button.addEventListener('click',()=>{state.tab=button.dataset.tab;render();remember();}));
+    form.addEventListener('submit',event=>{event.preventDefault();run(event.submitter,async()=>{const p=Object.fromEntries(['name','industry','service','instructions','tone'].map(k=>[k,value(k)]));await backend.saveProfile(p,{...snapshot.settings,handoffContact:snapshot.settings.handoffContact||'',mode:snapshot.settings.mode||'review'});await refresh();report(live?'基本設定已儲存在這部電腦。':'已示範儲存，沒有寫入工作室。');});});
+    form.elements.industry.addEventListener('change',paintSuggestion);
+    find('[data-reply-mode]').addEventListener('change',event=>{state.replyMode=event.target.value;paintSuggestion();remember();});
+    find('[data-use-hint]').addEventListener('click',()=>{const field=form.elements.instructions;const next=[field.value,selectedHint()].filter(Boolean).join('\n');if(next.length>2000){report('指令太長，請先整理現有內容再加入。',true);return;}field.value=next;report('已加入所選模式，按「儲存基本設定」採用。');});
+    find('[data-teaching-example]').addEventListener('click',()=>{find('[data-training-form]').elements.text.value='【示範資料，請改成你的實際安排】\n客人問：星期日有開門嗎？\n客服答：星期日休息，星期一至六上午十時至晚上七時營業。';report('已填入示例，尚未儲存。請先改成你的實際安排。');});
+    find('[data-training-form]').addEventListener('submit',event=>{event.preventDefault();const field=event.currentTarget.elements.text;run(event.submitter,async()=>{await backend.train(field.value.trim());field.value='';await refresh();report('請檢查剛整理的記憶，再確認採用。');});});
+    find('[data-model-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const key=f.elements.apiKey.value;f.elements.apiKey.value='';find('[data-ai-result]').textContent='正在測試連線及模型回覆…';try{const result=await backend.model({model:f.elements.model.value,apiKey:key});find('[data-ai-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-ai-result]').textContent=e.message;throw e;}});});
+    find('[data-disconnect-ai]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearAI();await refresh();find('[data-ai-result]').textContent='AI 接駁已清除。';report('已清除 AI 接駁，回到離線模式。');}));
+    find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const args=Object.fromEntries(new FormData(f));f.elements.apiKey.value='';find('[data-wa-result]').textContent='正在向服務取得二維碼…';find('[data-qr-box]').hidden=true;try{const result=await backend.whatsapp(args);const holder=find('[data-qr-image]');holder.replaceChildren();find('[data-qr-box]').hidden=!result.qr&&!result.preview;if(result.qr){const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';holder.append(img);}else if(result.preview){holder.textContent='二維碼位置示意 · 不可掃描';}find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;await refresh();throw e;}});});
+    find('[data-wa-check]').addEventListener('click',event=>run(event.currentTarget,async()=>{try{const result=await backend.checkWhatsApp();find('[data-wa-result]').textContent=result.message;if(result.status==='open')find('[data-qr-box]').hidden=true;report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;find('[data-qr-box]').hidden=true;throw e;}finally{await refresh();}}));
+    find('[data-wa-clear]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearWhatsApp();find('[data-qr-box]').hidden=true;find('[data-qr-image]').replaceChildren();await refresh();report('已清除本機接駁資料。如要移除手機裝置，請在 WhatsApp 的「已連結裝置」處理。');}));
+    if(live){find('.bp-preview-label').textContent='本機實測 · 與測試工作室分開';find('.bp-bottom-caption').textContent='設定及訓練記憶只儲存在本機；WhatsApp 對客發送未開啟。';find('.bp-workspace strong').textContent='本機工作台';find('.bp-avatar').textContent='本';all('[data-secret]').forEach(x=>{x.disabled=false;x.placeholder='在本機輸入，重啟服務後需重新填寫';});find('[data-model-submit]').textContent='測試並接駁 AI';find('[data-wa-submit]').textContent='取得二維碼';find('[data-key-help]').textContent='金鑰只暫存在本機服務記憶體，不寫入磁碟；重啟服務後需重新填寫。';}else{find('[data-model-form]').noValidate=true;find('[data-whatsapp-form]').noValidate=true;}
+    if(live){report('設定及訓練記憶會儲存在這部電腦。');find('[data-screen="list"] .bp-note').textContent='由卡片進入「配置客服」，設定回覆方式、訓練記憶及接駁渠道。';find('[data-screen="list"] .bp-page-title p').textContent='在同一個工作台設定、訓練及接駁你的客服。';find('[data-screen="list"] .bp-actions').hidden=true;}
+    try{await refresh(true);}catch(e){report(e.message,true);}
+    window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState){restore(event.detail.globals.widgetState);render();}});
+    if(globalThis.Tweak){const tweak=new Tweak({container:find('.bp-agent-card'),onChange:()=>{render();remember();}});tweak.addToggle(state,'showNumber',{label:'顯示 Agent 編號'});tweak.addSlider(state,'cardPadding',{label:'卡片留白',min:18,max:30,step:2,unit:'px'});if(!live)tweak.addToggle(state,'previewConnected',{label:'預覽已連接綠燈'});}
+  })();
+  

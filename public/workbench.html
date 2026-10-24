@@ -1,0 +1,84 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlueSAi-Cs-0001｜本機 Agent 工作台</title><link rel="icon" href="/brand.svg"><link rel="stylesheet" href="/workbench.css"><script src="/workbench-api.js" defer></script><script src="/workbench.js" defer></script></head><body><section class="local-login" data-local-login>
+<img src="/brand.svg" alt="Blueprint" width="40" height="40"><h1>本機客服工作台</h1><p>BlueSAi-Cs-#0001 · 你的獨立實測空間</p>
+<form data-local-login-form><label>管理員密碼<input name="token" type="password" autocomplete="current-password" required></label><button type="submit">登入工作台</button></form>
+<p data-login-error role="alert"></p><p>首次啟動的密碼保存在使用者目錄的 .bluesai-local-workbench/admin-token。請在本機讀取，不要貼到聊天。</p></section><div id="cs-card-design" hidden aria-label="藍圖工作室客服 AI 卡片與配置設計">
+  
+  <div class="bp-window">
+    <aside class="bp-side" aria-label="原工作室導覽示意">
+      <div class="bp-brand"><span class="bp-symbol" aria-hidden="true"></span><div><strong>Blueprint</strong><small>STUDIO</small></div></div>
+      <div class="bp-workspace"><span class="bp-avatar">測</span><div><strong>測試工作室</strong><br><span class="bp-muted">專屬管理後台</span></div></div>
+      <nav class="bp-nav"><span><i data-lucide="layout-grid" aria-hidden="true"></i>總覽</span><span><i data-lucide="list-checks" aria-hidden="true"></i>工作</span><span class="bp-selected"><i data-lucide="message-circle" aria-hidden="true"></i>AI</span><span><i data-lucide="folder" aria-hidden="true"></i>資料</span></nav>
+      <div class="bp-side-foot"><span><i data-lucide="archive" aria-hidden="true"></i>已封存</span><span><i data-lucide="link" aria-hidden="true"></i>AI 接駁中心</span><span><i data-lucide="circle-help" aria-hidden="true"></i>使用說明</span><span><i data-lucide="settings" aria-hidden="true"></i>偏好設定</span><span><i data-lucide="user-round" aria-hidden="true"></i>帳戶</span></div>
+    </aside>
+    <div class="bp-area">
+      <header class="bp-top"><span class="bp-mobile-brand"><i data-lucide="panel-left" aria-hidden="true"></i><strong>Blueprint Studio</strong></span><span>工作空間 <span class="bp-muted"> / </span><strong data-breadcrumb>Agent 工作台</strong></span><div class="bp-top-right"><span>更新資料</span><span>搜尋工作空間</span></div></header>
+      <main class="bp-main">
+        <div class="bp-preview-label"><span class="bp-dot"></span>設計預覽 · 未加入測試工作室</div>
+        <div class="bp-subnav" aria-label="原 AI 頁面分頁示意"><span><i data-lucide="file-text" aria-hidden="true"></i>Skill 與交接</span><span class="bp-selected"><i data-lucide="zap" aria-hidden="true"></i>Agent 工作台</span><span><i data-lucide="terminal" aria-hidden="true"></i>工作指令</span><span><i data-lucide="link" aria-hidden="true"></i>外部接入</span></div>
+        <section data-screen="list" aria-label="客服 AI 卡片入口">
+          <div class="bp-page-title"><div><h1>Agent 工作台</h1><p>在同一個工作台設定 Agent、準備工作，並查看 Codex 保存的結果。</p></div><div class="bp-actions" aria-label="原工作台操作示意"><span class="bp-button bp-primary">新增 Agent</span><span class="bp-button">重新讀取</span></div></div>
+          <p class="bp-note">需要 AI 處理的工作會先保存。請在目前已接通工具的 Codex 對話提出要求；這裡的按鈕不會自動啟動 Codex。</p>
+          <h2>已加入的 Agent</h2>
+          <div class="bp-cards">
+            <article class="bp-agent-card" aria-label="客服 AI 入口卡片">
+              <div class="bp-card-head"><span class="bp-card-icon"><i data-lucide="headset" aria-hidden="true"></i></span><div><div class="bp-card-name">客服 AI</div><div class="bp-code" data-agent-code>BlueSAi-Cs-#0001</div></div></div>
+              <p>用清楚、簡短的說話，回答客戶查詢。</p>
+              <div class="bp-card-foot"><span class="bp-connection" data-card-status data-connected="false" role="status"><span class="bp-connection-light" aria-hidden="true"></span><span data-connection-label>未連接</span></span><button class="bp-button bp-primary cursor-interaction" data-open type="button">配置客服<i data-lucide="arrow-right" aria-hidden="true"></i></button></div>
+              <p class="bp-muted bp-connection-detail" data-connection-detail>AI 模型及 WhatsApp 尚未連接。</p>
+            </article>
+          </div>
+          <h2>工作記錄</h2><p class="bp-empty">尚未建立客服工作。</p>
+        </section>
+        <section data-screen="config" aria-label="客服 AI 配置畫面" hidden>
+          <article class="bp-config-card" aria-label="客服設定卡片">
+          <div class="bp-config-toolbar"><button class="bp-link cursor-interaction" data-back type="button"><i data-lucide="arrow-left" aria-hidden="true"></i>返回 Agent 工作台</button><span class="bp-badge" data-runtime-label>設計預覽</span></div>
+          <div class="bp-tabs" role="tablist" aria-label="客服設定">
+            <button class="bp-tab cursor-interaction" id="cs-basic-tab" type="button" role="tab" aria-controls="cs-basic-panel" aria-selected="true" data-tab="basic">基本設定</button>
+            <button class="bp-tab cursor-interaction" id="cs-training-tab" type="button" role="tab" aria-controls="cs-training-panel" aria-selected="false" data-tab="training">訓練</button>
+            <button class="bp-tab cursor-interaction" id="cs-connect-tab" type="button" role="tab" aria-controls="cs-connect-panel" aria-selected="false" data-tab="connect">接駁</button>
+          </div>
+          <div class="bp-config-content">
+          <section class="bp-form-section" id="cs-basic-panel" role="tabpanel" aria-labelledby="cs-basic-tab" data-panel="basic">
+            <form data-config-form>
+              <div class="bp-field-row"><label class="bp-field">商戶名稱<input name="name" maxlength="80" placeholder="你的商戶名稱，可稍後填寫" autocomplete="off"></label><label class="bp-field">你的行業<select name="industry"><option value="">暫時不選</option><option>零售與網店</option><option>餐飲</option><option>美容與預約</option><option>專業服務</option><option>其他</option></select></label></div>
+              <label class="bp-field">你提供甚麼服務？<textarea name="service" rows="2" maxlength="500" placeholder="簡單介紹你的產品或服務。"></textarea></label>
+              <label class="bp-field">自訂回覆指令<textarea name="instructions" rows="4" maxlength="2000" placeholder="例如：先回答問題。資料不足時，每次只問一個重點。不要猜價錢或作出承諾。"></textarea><small>用平時說話交代要求，毋須學習指令格式。</small></label>
+              <div class="bp-suggestion"><div class="bp-suggestion-controls"><label class="bp-field">建議回覆模式<select data-reply-mode aria-label="建議回覆模式"><option value="industry">按行業建議</option><option value="concise">簡短直接</option><option value="friendly">親切自然</option><option value="professional">正式專業</option><option value="needs">先了解需要</option><option value="steps">逐步說明</option></select></label><button class="bp-button cursor-interaction" type="button" data-use-hint>加入指令</button></div><p data-industry-hint>先講答案，再講必要條件。每次只問一個重點。</p></div>
+              <label class="bp-field bp-tone-field">回覆語氣<select name="tone"><option value="friendly">簡短親切</option><option value="formal">簡短正式</option></select></label>
+              <button class="bp-button bp-primary cursor-interaction" type="submit">儲存基本設定</button>
+            </form>
+          </section>
+          <section id="cs-training-panel" role="tabpanel" aria-labelledby="cs-training-tab" data-panel="training" hidden>
+            <p class="bp-note">你教客服 → 整理成記憶 → 你確認後採用</p>
+            <div class="bp-training-grid">
+              <section class="bp-form-section"><h3>像聊天一樣，教懂你的客服</h3><p class="bp-muted bp-small">告訴它正確答案，或示範你想要的對答方式。</p>
+                <div class="bp-chat" data-training-chat aria-live="polite"><p class="bp-muted bp-small">還未開始訓練。可以先教一個常見問題。</p></div>
+                <form data-training-form><label class="bp-field">這次想教甚麼？<textarea name="text" required maxlength="2000" rows="3" placeholder="例如：客人問送貨要多久，請先問送貨地區，再按已確認的安排回答。"></textarea></label><div class="bp-actions"><button class="bp-button bp-primary cursor-interaction" type="submit">教客服記住</button><button class="bp-button cursor-interaction" data-teaching-example type="button">填入對答示例</button></div></form>
+                <p class="bp-small bp-muted bp-gap" data-training-mode>設計預覽會原文整理，不會呼叫 AI。</p>
+              </section>
+              <section class="bp-form-section"><div class="bp-data-head"><h3>客服的記憶</h3><span class="bp-badge" data-memory-count>0 條可用</span></div><p class="bp-small bp-muted">先檢查內容，再按「確認採用」。日後可以修改或刪除。</p><div data-memories aria-live="polite"></div><p class="bp-small bp-muted bp-gap">共用記憶只放商戶資料及回覆方式。個別客人的電話、訂單或私事不應放在這裡。</p></section>
+            </div>
+          </section>
+          <section id="cs-connect-panel" role="tabpanel" aria-labelledby="cs-connect-tab" data-panel="connect" hidden>
+            <p class="bp-note">先接駁 AI，再連 WhatsApp。接駁成功不會自動開啟對客發送。</p>
+            <section class="bp-form-section bp-connect-section"><div class="bp-data-head"><div><h3>1. 接駁 AI 模型</h3><p class="bp-small bp-muted">讓客服理解指令，運用你確認的記憶。</p></div><span class="bp-badge" data-ai-status>未接駁</span></div>
+              <form data-model-form><div class="bp-field-row"><label class="bp-field">服務供應商<input value="OpenAI" readonly aria-label="服務供應商"></label><label class="bp-field">模型名稱<input name="model" required maxlength="100" placeholder="填寫你的帳戶可用模型" autocomplete="off"></label></div><label class="bp-field">API 金鑰<input name="apiKey" type="password" disabled autocomplete="off" maxlength="500" placeholder="設計稿毋須填寫金鑰" data-secret><small data-key-help>正式接駁時，在本機填寫，毋須貼到聊天。</small></label><div class="bp-actions"><button type="submit" class="bp-button bp-primary cursor-interaction" data-model-submit>預覽連線結果</button><button type="button" class="bp-button cursor-interaction" data-disconnect-ai>清除接駁</button></div><p class="bp-small bp-muted bp-gap" data-ai-result>接駁時會驗證模型連線，使用你的 API 額度。</p></form>
+            </section>
+            <section class="bp-form-section bp-connect-section"><div class="bp-data-head"><div><h3>2. 接駁 WhatsApp</h3><p class="bp-small bp-muted">填服務資料 → 顯示二維碼 → 用手機連結。</p></div><span class="bp-badge" data-wa-status>未接駁</span></div>
+              <form data-whatsapp-form><details open><summary>Evolution 服務資料</summary><p class="bp-small bp-muted">需要一個已建立的 Evolution 服務及 WhatsApp 連線名稱。這些資料由安裝服務的人提供。</p><label class="bp-field">服務網址<input name="url" type="url" maxlength="500" placeholder="https://你的服務網址" required autocomplete="off"></label><div class="bp-field-row"><label class="bp-field">連線名稱<input name="instance" required maxlength="100" placeholder="你的 instance 名稱" autocomplete="off"></label><label class="bp-field">接駁金鑰<input name="apiKey" type="password" disabled data-secret maxlength="500" placeholder="設計稿毋須填寫金鑰" autocomplete="off"></label></div></details><div class="bp-actions"><button class="bp-button bp-primary cursor-interaction" type="submit" data-wa-submit>預覽掃碼步驟</button><button class="bp-button cursor-interaction" type="button" data-wa-check>檢查連線</button><button class="bp-button cursor-interaction" type="button" data-wa-clear>清除本機接駁</button></div></form>
+              <div data-qr-box class="bp-qr-box" hidden><div data-qr-image class="bp-qr-placeholder"><i data-lucide="qr-code" aria-hidden="true"></i><span>設計示意 · 不可掃描</span></div><div><h3>用 WhatsApp 掃描</h3><ol class="bp-small"><li>在手機打開 WhatsApp。</li><li>選「已連結裝置」，再選「連結裝置」。</li><li>掃描二維碼，再按「檢查連線」。</li></ol><p class="bp-small bp-muted">二維碼過期時，重新取得即可。</p></div></div>
+              <p class="bp-small bp-muted bp-gap" data-wa-result>連接與掃碼只建立裝置連線，未開啟訊息收發。</p>
+              <details class="bp-next-step"><summary>連接後，怎樣接收客人訊息？</summary><p class="bp-small bp-muted">正式收發還需要可供 Evolution 存取的接收網址、測試帳號及發送設定；此頁不會自動開啟。</p></details>
+            </section>
+          </section>
+          </div>
+          <div class="bp-footer"><span class="bp-feedback" data-feedback role="status" aria-live="polite">設定只供這份設計稿預覽。</span></div>
+          </article>
+        </section>
+        <div class="bp-bottom-caption">設計稿 · 畫面操作不會修改正式工作室</div>
+      </main>
+    </div>
+  </div>
+  
+</div>
+</body></html>

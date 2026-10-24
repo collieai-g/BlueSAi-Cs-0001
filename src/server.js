@@ -29,11 +29,12 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
 
-export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now() }) {
+export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now(), workbench = null, sessionCookieName = 'bp_session' }) {
   if (adminToken.length < 32) throw new Error('ADMIN_TOKEN must contain at least 32 characters');
   if (webhookSecret && webhookSecret.length < 32) throw new Error('WEBHOOK_SECRET must contain at least 32 characters');
   const sessions = new Map(); const failures = new Map();
-  const cookie = (value, age) => `bp_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cookieSecure ? '; Secure' : ''}`;
+  if(!/^[a-zA-Z0-9_]+$/.test(sessionCookieName))throw new Error('Invalid cookie name');
+  const cookie = (value, age) => `${sessionCookieName}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cookieSecure ? '; Secure' : ''}`;
   const runtime = () => ({ agent: engine.agent.configured ? 'openai' : 'offline', evolutionConfigured: engine.evolution.configured,
     deliveryEnabled: engine.evolution.deliveryEnabled, liveReady: engine.liveReady(), webhookConfigured: Boolean(webhookSecret) });
   const server = createServer(async (req, res) => {
@@ -75,7 +76,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         res.setHeader('Set-Cookie', cookie(id, 12 * 3600)); return json(res, 200, { ok: true });
       }
       if (path.startsWith('/api/')) {
-        const session = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('bp_session='))?.slice(11);
+        const session = String(req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(sessionCookieName+'='))?.slice(sessionCookieName.length+1);
         if (!session || (sessions.get(session) || 0) < Date.now()) throw new ServiceError('請先登入。', 401);
         if (!['GET','HEAD'].includes(method)) {
           const origin = req.headers.origin;
@@ -84,13 +85,57 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (path === '/api/logout' && method === 'POST') {
           sessions.delete(session); res.setHeader('Set-Cookie', cookie('', 0)); return json(res, 200, { ok: true });
         }
+        if (workbench && path === '/api/workbench' && method === 'GET') return json(res,200,{
+          profile:store.value('profile'),settings:store.value('settings'),knowledge:store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
+          training:store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 40) ORDER BY id'),connections:workbench.status(),
+        });
+        if (workbench && path === '/api/workbench/profile' && method === 'PUT') {
+          const input=await body(req),p=input.profile||{},s=input.settings||{};
+          const profile={name:string(p.name,80,false),industry:string(p.industry,80,false),service:string(p.service,500,false),instructions:string(p.instructions,2000,false),tone:choice(p.tone,['friendly','formal'])};
+          const settings={mode:choice(s.mode,['review','auto']),handoffContact:string(s.handoffContact,300,false)};
+          store.transaction(()=>{store.set('profile',profile);store.set('settings',settings);store.revise();store.audit('workbench_profile');});return json(res,200,{ok:true});
+        }
+        if (workbench && path === '/api/workbench/training' && method === 'POST') {
+          const text=string((await body(req)).text,2000);
+          if(store.get('SELECT count(*) AS n FROM knowledge').n>=100)throw new ServiceError('已達 100 條記憶，請先整理舊記憶。');
+          const history=store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 12) ORDER BY id');
+          let learned;try{learned=await engine.agent.learn(text,history);}catch{throw new ServiceError('訓練未完成，沒有新增記憶。請檢查 AI 接駁後再試。',502);}
+          const id=randomUUID();
+          store.transaction(()=>{
+            if(learned.remember){
+              if(store.get('SELECT count(*) AS n FROM knowledge').n>=100)throw new ServiceError('已達 100 條記憶，請先整理。');
+              store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)',id,learned.title,learned.category,learned.content,0,null,Date.now());store.revise();
+            }
+            store.run('INSERT INTO training_turns(role,content,created_at) VALUES (?,?,?)','user',text,Date.now());
+            store.run('INSERT INTO training_turns(role,content,created_at) VALUES (?,?,?)','assistant',learned.text,Date.now());
+            store.audit('training_proposed',learned.remember?id:'');
+          });return json(res,201,{ok:true});
+        }
+        if (workbench && path === '/api/workbench/trial' && method === 'POST') {
+          const input=await body(req),text=string(input.text,2000);
+          if(!Array.isArray(input.history)||input.history.length>100)throw new ServiceError('試聊背景無效。');
+          const history=input.history.slice(-24).map(x=>({role:choice(x.role,['user','assistant']),content:string(x.content,2000)}));
+          const revision=store.value('revision'),facts=store.facts();let result;
+          try{result=await engine.agent.reply({profile:store.value('profile'),facts,history:[...history,{role:'user',content:text}]});}
+          catch{throw new ServiceError('AI 未能完成回覆，請檢查接駁及額度後再試。',502);}
+          if(revision!==store.value('revision')||result.sourceIds.some(id=>!store.facts().some(f=>f.id===id)))throw new ServiceError('記憶或設定已更新，請再試一次。',409);
+          return json(res,200,{...result,sources:facts.filter(f=>result.sourceIds.includes(f.id)).map(f=>({id:f.id,title:f.title}))});
+        }
+        if(workbench && path.startsWith('/api/workbench/connections/')){
+          const action=path.split('/').at(-1);
+          if(method==='POST'&&action==='model')return json(res,200,await workbench.model(await body(req)));
+          if(method==='DELETE'&&action==='model'){await workbench.clearAI();return json(res,200,{ok:true});}
+          if(method==='POST'&&action==='whatsapp')return json(res,200,await workbench.whatsapp(await body(req)));
+          if(method==='POST'&&action==='whatsapp-check')return json(res,200,await workbench.checkWhatsApp());
+          if(method==='DELETE'&&action==='whatsapp'){await workbench.clearWhatsApp();return json(res,200,{ok:true});}
+        }
         if (path === '/api/state' && method === 'GET') return json(res, 200, {
           profile: store.value('profile'), settings: store.value('settings'), knowledge: store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
           conversations: store.conversations(), runtime: runtime(), identity,
         });
         if (path === '/api/profile' && method === 'PUT') {
           const input = await body(req);
-          const profile = { name: string(input.name,80,false), service: string(input.service,500,false), instructions: string(input.instructions,2000,false), tone: choice(input.tone,['friendly','formal']) };
+          const profile = { name: string(input.name,80,false), industry:string(input.industry??store.value('profile').industry??'',80,false), service: string(input.service,500,false), instructions: string(input.instructions,2000,false), tone: choice(input.tone,['friendly','formal']) };
           store.transaction(() => { store.set('profile', profile); store.revise(); store.audit('update_profile'); });
           return json(res, 200, { profile });
         }
@@ -114,13 +159,18 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           return json(res, 201, { id });
         }
         const knowledge = path.match(/^\/api\/knowledge\/([\w-]+)$/);
-        if (knowledge && ['POST','DELETE'].includes(method)) {
+        if (knowledge && ['POST','PUT','DELETE'].includes(method)) {
           const id = knowledge[1]; const item = store.get('SELECT * FROM knowledge WHERE id=?', id);
           if (!item) throw new ServiceError('找不到資料。', 404);
           if (method === 'POST' && item.expires_at && item.expires_at <= Date.now()) throw new ServiceError('資料已過期，請新增已更新的版本。');
+          const edit=method==='PUT'?await body(req):null;
+          const updated=edit?string(edit.content,2000):null;
+          const category=edit?choice(edit.category??item.category,['general','hours','price','refund','style']):null;
           store.transaction(() => {
+            if(method==='PUT')store.run('UPDATE knowledge SET content=?,category=?,approved=0 WHERE id=?',updated,category,id);
+            else
             store.run(method === 'DELETE' ? 'DELETE FROM knowledge WHERE id=?' : 'UPDATE knowledge SET approved=1 WHERE id=?', id);
-            store.revise(); store.audit(method === 'DELETE' ? 'knowledge_deleted' : 'knowledge_approved', id);
+            store.revise(); store.audit(method === 'DELETE' ? 'knowledge_deleted' : method==='PUT'?'knowledge_edited':'knowledge_approved', id);
           });
           return json(res, 200, { ok: true });
         }
@@ -152,7 +202,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (approval && method === 'POST') { const input = await body(req); engine.approve(approval[1], string(input.text,4000,false)); return json(res,200,{ok:true}); }
         throw new ServiceError('找不到此操作。', 404);
       }
-      const assets = { '/': ['index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+      const assets = { '/': [workbench?'workbench.html':'index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+        '/workbench.js':['workbench.js','text/javascript; charset=utf-8'], '/workbench-api.js':['workbench-api.js','text/javascript; charset=utf-8'], '/workbench.css':['workbench.css','text/css; charset=utf-8'],
         '/vendor/blueprint-style.css': ['vendor/blueprint-style.css','text/css; charset=utf-8'],
         '/vendor/blueprint-studio.css': ['vendor/blueprint-studio.css','text/css; charset=utf-8'], '/brand.svg': ['brand.svg','image/svg+xml'] };
       if (method === 'GET' && assets[path]) {

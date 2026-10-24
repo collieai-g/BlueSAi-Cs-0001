@@ -1,5 +1,13 @@
 # 實作架構與邊界
 
+## 藍圖工作室內置插件方向
+
+本產品專為藍圖工作室設計，介面及卡片行為遵循 [插件設計規格](BLUEPRINT_PLUGIN_DESIGN.md)。宿主負責外層導覽、身份權限、卡片註冊、移動／縮放與排版偏好；插件負責客服設定、訓練記憶及渠道狀態。固定尺寸範圍目前是整合規格，尚未接到原生排版引擎。
+
+`src/workbench.js` 提供獨立 3101 本機實測入口，使用自己的資料目錄和登入 cookie；`src/connections.js` 管理記憶體內的接駁憑證及驗證。這個入口不啟動對客發送 worker，也不提供 webhook。`design/customer-agent-card-design.html` 的三分頁卡片經建置成 `public/workbench.*`，HTTP 操作另外放在 `public/workbench-api.js`。本機外殼不等於已安裝到工作室；正式嵌入前仍須實作宿主認證及資料範圍。
+
+以下描述保留的 3100 客服服務與共用核心。
+
 ## 實作選擇
 
 第一版將原設計落地為 Node.js 24、原生 JavaScript ES modules、SQLite 和靜態前端。省去套件安裝與建置，方便在 Windows／Linux 檢查。這是單商戶單程序的起步實作；大規模版本再遷移 PostgreSQL／工作佇列及租戶權限。
