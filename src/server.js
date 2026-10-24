@@ -152,7 +152,9 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (approval && method === 'POST') { const input = await body(req); engine.approve(approval[1], string(input.text,4000,false)); return json(res,200,{ok:true}); }
         throw new ServiceError('找不到此操作。', 404);
       }
-      const assets = { '/': ['index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'] };
+      const assets = { '/': ['index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+        '/vendor/blueprint-style.css': ['vendor/blueprint-style.css','text/css; charset=utf-8'],
+        '/vendor/blueprint-studio.css': ['vendor/blueprint-studio.css','text/css; charset=utf-8'], '/brand.svg': ['brand.svg','image/svg+xml'] };
       if (method === 'GET' && assets[path]) {
         const [file, mime] = assets[path]; const content = await readFile(publicDir + file);
         res.writeHead(200, { 'Content-Type': mime }); return res.end(content);

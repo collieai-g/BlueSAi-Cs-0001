@@ -1,75 +1,98 @@
 <!doctype html>
 <html lang="zh-Hant">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlueSAI-客服</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffffff">
+  <title>BlueSAI-客服｜客服工作台</title>
+  <link rel="icon" href="/brand.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/blueprint-style.css"><link rel="stylesheet" href="/vendor/blueprint-studio.css"><link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
 <body>
-<section id="login" class="login-card">
-  <div class="brand"><span class="mark">B</span><span>BlueSAI-客服</span></div>
-  <p class="help">Agent 編號：BlueSAi-Cs-#0001</p><h1>登入你的客服工作室</h1><p class="muted">用簡單說話，提供清楚的服務。</p>
-  <form id="login-form"><label for="token">管理員密碼</label><input id="token" type="password" autocomplete="current-password" required><p class="help">首次啟動時，終端機會顯示密碼檔案的位置。</p><button class="primary" type="submit">登入</button></form>
+<section id="login" class="login-card studio-setting-card" aria-labelledby="login-title">
+  <div class="sidebar-brand"><img class="brand-mark" src="/brand.svg" width="48" height="48" alt=""><span class="brand-wordmark"><strong>BlueSAI</strong><small>客服工作台</small></span></div>
+  <p class="eyebrow login-eyebrow">BlueSAi-Cs-#0001</p>
+  <h1 id="login-title">歡迎回到客服工作台<span class="title-dot">.</span></h1><p class="muted">用簡單的說話，提供清楚的服務。</p>
+  <form id="login-form"><label for="token">管理員密碼</label><input id="token" type="password" autocomplete="current-password" required><p class="help">首次啟動時，終端機會顯示密碼檔案的位置。</p><button class="button primary" type="submit">登入工作台 <span data-icon="arrow" aria-hidden="true"></span></button></form>
 </section>
 <div id="app" hidden>
-  <header class="app-header"><div class="brand"><span class="mark">B</span><span>BlueSAI-客服</span><span id="engine-tag" class="badge"></span></div><button id="logout" class="quiet">登出</button></header>
-  <nav aria-label="主要功能"><button data-page="inbox">對話</button><button data-page="teach" aria-current="page">教客服</button><button data-page="settings">設定</button></nav>
-  <main>
-    <section id="page-teach">
-      <div class="page-heading"><div><p class="eyebrow">你的服務，你的說話方式</p><h1>教客服幫你處理查詢</h1><p class="muted">由空白開始。有多少已確認資料，就先教多少。</p></div></div>
-      <div class="teach-grid">
-        <div>
-          <form id="profile-form" class="panel">
-            <h2>先認識你的商戶</h2>
-            <label for="name">商戶名稱</label><input id="name" maxlength="80" placeholder="例如：森日家品">
+  <a class="skip-link" href="#main">跳至工作內容</a>
+  <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="關閉導覽" hidden></button>
+  <aside id="sidebar" class="sidebar" aria-label="主要導覽">
+    <a class="sidebar-brand" href="#/overview" aria-label="BlueSAI-客服總覽"><img class="brand-mark" src="/brand.svg" width="48" height="48" alt=""><span class="brand-wordmark"><strong>BlueSAI</strong><small>客服工作台</small></span></a>
+    <div class="workspace-label"><span id="company-avatar" class="workspace-avatar" aria-hidden="true">客</span><div><strong id="company-name">我的客服</strong><small>專用客戶服務 Agent</small></div></div>
+    <div id="studio-sidebar-tools"><button id="sidebar-toggle" class="studio-narrow-toggle" type="button" aria-expanded="true">收窄側欄</button></div>
+    <div id="studio-nav-scroll"><nav id="studio-navigation" class="main-nav" aria-label="工作台主列">
+      <button class="nav-item studio-primary active" type="button" data-page="overview" aria-current="page" title="總覽"><span data-icon="dashboard" aria-hidden="true"></span><span class="studio-nav-label">總覽</span></button>
+      <button class="nav-item studio-primary" type="button" data-page="inbox" title="工作：客戶對話"><span data-icon="checklist" aria-hidden="true"></span><span class="studio-nav-label">工作</span><span id="pending-count" class="nav-count" hidden></span></button>
+      <button class="nav-item studio-primary" type="button" data-page="teach" title="AI：教客服"><span data-icon="chat" aria-hidden="true"></span><span class="studio-nav-label">AI</span></button>
+      <button class="nav-item studio-primary" type="button" data-page="knowledge" title="資料：客服知識"><span data-icon="folder" aria-hidden="true"></span><span class="studio-nav-label">資料</span></button>
+    </nav></div>
+    <div class="sidebar-bottom"><button id="settings-button" class="nav-item" type="button" data-page="settings" title="設定"><span data-icon="settings" aria-hidden="true"></span><span>設定</span></button><p id="version">BlueSAi-Cs-#0001<br>客服工作台 v0.2.0</p></div>
+  </aside>
+  <div class="app-main">
+    <header class="topbar"><div class="topbar-start"><button id="mobile-menu" class="icon-button mobile-menu" type="button" aria-label="開啟導覽" aria-controls="sidebar" aria-expanded="false"><span data-icon="menu" aria-hidden="true"></span></button><p class="breadcrumb">工作空間 <span aria-hidden="true">/</span> <strong id="breadcrumb-current">客服總覽</strong></p></div><div class="top-actions"><button id="refresh" class="button quiet small" type="button">更新資料</button><button class="button secondary" type="button" data-page="teach" data-focus="demo-text"><span data-icon="chat" aria-hidden="true"></span>試聊</button></div></header>
+    <main id="main" tabindex="-1">
+      <div class="workspace-status"><span class="sync-dot" aria-hidden="true"></span><span id="engine-tag">載入中</span><span aria-hidden="true"> · </span><span id="workspace-sync">正在讀取客服資料</span></div>
+      <section id="page-overview" aria-labelledby="overview-title">
+        <div class="page-heading"><div><p class="eyebrow">YOUR CUSTOMER SERVICE</p><h1 id="overview-title" tabindex="-1">客服總覽<span class="title-dot">.</span></h1><p class="page-description">先處理需要你的對話，再讓客服幫忙。</p></div><p id="page-date" class="page-date"></p></div>
+        <div class="summary-grid">
+          <button class="widget-surface summary-card" type="button" data-page="inbox" data-filter="pending"><span class="widget-heading"><span data-icon="inbox" aria-hidden="true"></span>待你處理</span><strong id="summary-pending" class="widget-count">0</strong><span class="widget-open">查看待辦 <span data-icon="arrow" aria-hidden="true"></span></span></button>
+          <button class="widget-surface summary-card" type="button" data-page="inbox" data-filter="all"><span class="widget-heading"><span data-icon="chat" aria-hidden="true"></span>客戶對話</span><strong id="summary-conversations" class="widget-count">0</strong><span class="widget-open">包括試聊 <span data-icon="arrow" aria-hidden="true"></span></span></button>
+          <button class="widget-surface summary-card" type="button" data-page="knowledge"><span class="widget-heading"><span data-icon="folder" aria-hidden="true"></span>可用資料</span><strong id="summary-knowledge" class="widget-count">0</strong><span class="widget-open">已確認且有效 <span data-icon="arrow" aria-hidden="true"></span></span></button>
+          <button class="widget-surface summary-card" type="button" data-page="settings"><span class="widget-heading"><span data-icon="settings" aria-hidden="true"></span>回覆方式</span><strong id="summary-mode" class="summary-mode">先確認</strong><span id="summary-delivery" class="widget-open">真實發送未開啟</span></button>
+        </div>
+        <div class="overview-grid">
+          <section class="studio-card"><div class="card-heading"><h2>最近對話</h2><button class="button quiet small" type="button" data-page="inbox" data-filter="all">查看全部 <span data-icon="arrow" aria-hidden="true"></span></button></div><div id="recent-conversations"></div></section>
+          <section class="studio-card start-card"><p class="eyebrow">從這裡開始</p><h2>三步，準備好你的客服。</h2><ol class="setup-steps"><li><button type="button" data-page="teach" data-focus="name"><span class="step-number">1</span><span><strong>告訴客服怎樣幫你</strong><small>填寫服務及回覆語氣。</small></span><span data-icon="arrow" aria-hidden="true"></span></button></li><li><button type="button" data-page="knowledge"><span class="step-number">2</span><span><strong>加入已確認的資料</strong><small>例如價錢、時間及退貨安排。</small></span><span data-icon="arrow" aria-hidden="true"></span></button></li><li><button type="button" data-page="teach" data-focus="demo-text"><span class="step-number">3</span><span><strong>先試聊，再接待客人</strong><small>試聊不會發到 WhatsApp。</small></span><span data-icon="arrow" aria-hidden="true"></span></button></li></ol></section>
+        </div>
+      </section>
+      <section id="page-inbox" hidden aria-labelledby="inbox-title">
+        <div class="studio-section-nav"><span class="studio-section-link active">客戶對話</span></div>
+        <div class="studio-page-header"><div><h1 id="inbox-title" tabindex="-1">客戶對話<span class="title-dot">.</span></h1><p class="muted">查看草稿、確認回覆，或親自接手。</p></div></div>
+        <div class="inbox-grid"><aside class="studio-card contact-panel" aria-label="對話清單"><label for="conversation-search" class="sr-only">搜尋對話</label><input id="conversation-search" type="search" placeholder="搜尋名稱或訊息…" autocomplete="off"><label for="conversation-filter">顯示</label><select id="conversation-filter"><option value="all">全部對話</option><option value="pending">待你處理</option><option value="waiting">等待人工</option><option value="human">由人工處理</option></select><div id="conversation-list"></div></aside>
+          <section class="studio-detail"><div id="conversation-empty" class="studio-empty"><span data-icon="chat" aria-hidden="true"></span><h2>選擇一段對話</h2><p>還沒有對話？先到 AI 試聊一下。</p><button class="button secondary" type="button" data-page="teach" data-focus="demo-text">開始試聊</button></div><div id="conversation-detail" hidden>
+            <div class="inline spread"><div><h2 id="conversation-name"></h2><p id="conversation-status" class="help"></p></div><div class="inline"><button id="takeover" class="button primary" type="button">接手對話</button><button id="resume" class="button secondary" type="button">交回 AI</button></div></div>
+            <p id="channel-note" class="service-note"></p><div id="messages" class="chat" aria-live="polite"></div>
+            <form id="reply-form"><label for="reply-text">你的回覆</label><textarea id="reply-text" rows="3" maxlength="4000" required placeholder="先接手，再回覆客人"></textarea><button type="submit" class="button primary" id="send-reply">發送回覆</button></form>
+            <div class="foot-actions"><span class="help">只使用本次對話背景。</span><button id="delete-conversation" class="button quiet danger" type="button">刪除對話</button></div>
+          </div></section>
+        </div>
+      </section>
+      <section id="page-teach" hidden aria-labelledby="teach-title">
+        <div class="studio-section-nav"><span class="studio-section-link active">教客服</span></div>
+        <div class="studio-page-header"><div><h1 id="teach-title" tabindex="-1">教客服<span class="title-dot">.</span></h1><p class="muted">用普通說話交代要求，右邊即時試聊。</p></div><button class="button secondary" type="button" data-page="knowledge"><span data-icon="folder" aria-hidden="true"></span>管理客服知識</button></div>
+        <div class="teach-grid">
+          <form id="profile-form" class="studio-setting-card"><h2>你想客服怎樣幫忙？</h2><p class="help">由空白開始。未提供的資料，客服不會自行補上。</p>
+            <label for="name">商戶名稱</label><input id="name" maxlength="80" placeholder="填寫你的商戶名稱">
             <label for="service">你提供甚麼服務？</label><textarea id="service" rows="2" maxlength="500" placeholder="簡單介紹產品或服務"></textarea>
-            <label for="instructions">你想客服怎樣幫忙？</label><textarea id="instructions" rows="3" maxlength="2000" placeholder="例如：先了解客人需要。查訂單時，先問訂單編號。"></textarea>
-            <div class="inline"><div class="grow"><label for="tone">回覆語氣</label><select id="tone"><option value="friendly">親切自然</option><option value="formal">簡潔正式</option></select></div><button class="primary" type="submit">儲存設定</button></div>
-            <p class="help">回覆保持專業，先講答案，再講必要條件，每次只問一個重點。</p>
+            <label for="instructions">工作指令</label><textarea id="instructions" rows="4" maxlength="2000" placeholder="例如：先了解客人需要。查訂單前，先問訂單編號。"></textarea>
+            <label for="tone">回覆語氣</label><select id="tone"><option value="friendly">親切自然</option><option value="formal">簡潔正式</option></select>
+            <p class="service-note">先講答案，再講必要條件。每次只問一個重點。</p><button class="button primary" type="submit">儲存設定</button>
           </form>
-          <section class="panel">
-            <h2>商戶資料</h2><p class="muted">只有你確認過、仍然有效的資料，才會用來回答。</p>
-            <div id="knowledge-list"></div>
-            <details id="knowledge-details"><summary>加入資料</summary>
-              <form id="knowledge-form">
-                <label for="fact-title">這條資料叫甚麼？</label><input id="fact-title" required maxlength="100" placeholder="例如：退貨安排">
-                <label for="fact-category">類別</label><select id="fact-category"><option value="general">一般資料</option><option value="price">價錢</option><option value="hours">營業時間</option><option value="refund">退貨與退款</option></select>
-                <label for="fact-content">內容</label><textarea id="fact-content" rows="3" required maxlength="2000" placeholder="請保留適用條件及例外"></textarea>
-                <label for="fact-expiry">有效至（可留白）</label><input id="fact-expiry" type="date">
-                <label class="check"><input id="fact-approved" type="checkbox"><span>我已核對，可以用來回答客戶</span></label>
-                <button type="submit">儲存資料</button>
-              </form>
-            </details>
+          <section class="studio-card try-panel"><div class="card-heading"><h2>先試聊一下</h2><button id="new-demo" class="button quiet small" type="button">重新試聊</button></div><p id="demo-description" class="help"></p>
+            <div class="suggestions"><button class="button secondary small" type="button" data-question="想問一下價錢。">問價錢</button><button class="button secondary small" type="button" data-question="你們幾點開門？">問時間</button><button class="button secondary small" type="button" data-question="我想申請退款。">問退款</button></div>
+            <div id="demo-chat" class="chat" aria-live="polite"><p class="empty">試問一句，看看客服怎樣回答。</p></div>
+            <form id="demo-form"><label for="demo-text">你的問題</label><textarea id="demo-text" rows="2" required maxlength="4000" placeholder="輸入客人可能會問的問題"></textarea><div class="inline spread"><button class="button primary" type="submit">試一試 <span data-icon="arrow" aria-hidden="true"></span></button><button class="button quiet small" type="button" data-page="inbox">查看草稿</button></div></form>
+            <p class="help">只在這裡試聊，不會發送 WhatsApp 訊息。</p>
           </section>
         </div>
-        <section class="panel try-panel">
-          <div class="inline spread"><h2>先試聊一下</h2><button id="new-demo" class="quiet">重新試聊</button></div>
-          <p id="demo-description" class="help"></p>
-          <div class="suggestions"><button data-question="想問一下價錢。">問價錢</button><button data-question="你們幾點開門？">問時間</button><button data-question="我想申請退款。">問退款</button></div>
-          <div id="demo-chat" class="chat" aria-live="polite"><p class="empty">試問一句，看看客服怎樣回答。</p></div>
-          <form id="demo-form"><label for="demo-text">你的問題</label><textarea id="demo-text" rows="2" required maxlength="4000" placeholder="輸入客人可能會問的問題"></textarea><button class="primary" type="submit">試一試</button></form>
-          <p class="help">試聊不會發到 WhatsApp。需要接手或確認草稿時，可到「對話」處理。</p>
-        </section>
-      </div>
-    </section>
-    <section id="page-inbox" hidden>
-      <div class="page-heading"><div><p class="eyebrow">每段對話，都有人照顧</p><h1>對話</h1><p class="muted">接手後，AI 會暫停，直到你明確交回。</p></div><button id="refresh">重新整理</button></div>
-      <div class="inbox-grid"><aside class="panel contact-panel"><label for="conversation-filter">顯示</label><select id="conversation-filter"><option value="all">全部對話</option><option value="waiting">等待人工</option><option value="human">由人工處理</option></select><div id="conversation-list"></div></aside>
-        <section class="panel"><div id="conversation-empty" class="empty">選擇一段對話，或先到「教客服」試聊。</div><div id="conversation-detail" hidden>
-          <div class="inline spread"><div><h2 id="conversation-name"></h2><p id="conversation-status" class="help"></p></div><div class="inline"><button id="takeover" class="primary">接手對話</button><button id="resume">交回 AI</button></div></div>
-          <p id="channel-note" class="notice"></p><div id="messages" class="chat" aria-live="polite"></div>
-          <form id="reply-form"><label for="reply-text">你的回覆</label><textarea id="reply-text" rows="3" maxlength="4000" required placeholder="先接手，再回覆客人"></textarea><button type="submit" class="primary" id="send-reply">發送回覆</button></form>
-          <div class="foot-actions"><span class="help">只使用本次對話背景，未啟用跨次客戶記憶。</span><button id="delete-conversation" class="danger quiet">刪除對話</button></div>
-        </div></section>
-      </div>
-    </section>
-    <section id="page-settings" hidden>
-      <div class="page-heading"><div><p class="eyebrow">讓你掌握處理方式</p><h1>設定</h1><p class="muted">先確認，熟習後再考慮自動回覆。</p></div></div>
-      <div class="settings-grid"><form id="settings-form" class="panel">
-        <h2>回覆方式</h2>
-        <label class="radio"><input type="radio" name="mode" value="review" checked><span><strong>先讓我確認</strong><small>客服先寫草稿，由你檢查後發送。</small></span></label>
-        <label class="radio"><input type="radio" name="mode" value="auto"><span><strong>自動回覆已知問題</strong><small>有已確認依據才自動回答。追問及需人工決定的內容仍會留待處理。</small></span></label>
-        <label for="handoff-contact">客人可以怎樣聯絡真人？</label><input id="handoff-contact" maxlength="300" placeholder="例如：致電店舖或留待此對話的客服接手">
-        <p class="help">待人工處理的查詢會留在「對話」。第一版沒有額外電郵或手機推送通知，請安排人員查看。</p><button class="primary" type="submit">儲存設定</button>
-      </form><section class="panel"><h2>你的客服</h2><dl><dt>名稱</dt><dd>BlueSAI-客服</dd><dt>Agent 編號</dt><dd>BlueSAi-Cs-#0001</dd></dl><hr><h2>連接狀態</h2><dl id="connection-status"></dl><p class="notice">設定完成不代表已驗證連線。正式發送前，請先用測試帳號核對收發及人工接手。</p><p class="help">API 密鑰由管理員在伺服器設定，這個畫面不會顯示密鑰。</p><hr><p class="help">訊息連接採用 <a href="https://github.com/evolution-foundation/evolution-api" target="_blank" rel="noreferrer">Evolution API</a>。本產品使用獨立設計的客服介面。</p></section></div>
-    </section>
-  </main><footer>BlueSAI-客服 · BlueSAi-Cs-#0001<br>簡單說清楚，認真做好服務。</footer>
+      </section>
+      <section id="page-knowledge" hidden aria-labelledby="knowledge-title">
+        <div class="studio-section-nav"><span class="studio-section-link active">客服知識</span></div>
+        <div class="studio-page-header"><div><h1 id="knowledge-title" tabindex="-1">客服知識<span class="title-dot">.</span></h1><p class="muted">只有已確認、仍然有效的資料，才會用來回答。</p></div><button id="add-knowledge" class="button secondary" type="button"><span data-icon="plus" aria-hidden="true"></span>加入資料</button></div>
+        <div class="knowledge-grid"><section class="studio-card"><label for="knowledge-search" class="sr-only">搜尋客服知識</label><input id="knowledge-search" type="search" placeholder="搜尋資料名稱或內容…" autocomplete="off"><div id="knowledge-list"></div></section>
+          <section class="studio-setting-card knowledge-editor"><details id="knowledge-details"><summary>加入一條資料</summary><p class="help">保留適用條件。客人的個人資料不用放在這裡。</p><form id="knowledge-form"><label for="fact-title">資料名稱</label><input id="fact-title" required maxlength="100" placeholder="例如：退貨安排"><label for="fact-category">類別</label><select id="fact-category"><option value="general">一般資料</option><option value="price">價錢</option><option value="hours">營業時間</option><option value="refund">退貨與退款</option></select><label for="fact-content">內容</label><textarea id="fact-content" rows="4" required maxlength="2000" placeholder="請保留適用條件及例外"></textarea><label for="fact-expiry">有效至（可留白）</label><input id="fact-expiry" type="date"><label class="check"><input id="fact-approved" type="checkbox"><span>我已核對，可以用來回答客戶</span></label><button class="button primary" type="submit">儲存資料</button></form></details><p class="help knowledge-tip">未確認或已過期的資料，客服不會採用。</p></section>
+        </div>
+      </section>
+      <section id="page-settings" hidden aria-labelledby="settings-title">
+        <div class="studio-page-header"><div><h1 id="settings-title" tabindex="-1">設定<span class="title-dot">.</span></h1><p class="muted">掌握回覆方式，隨時保留人工接手。</p></div><button id="logout" class="button secondary" type="button">登出</button></div>
+        <div class="settings-grid"><form id="settings-form" class="studio-setting-card"><h2>回覆方式</h2><label class="radio"><input type="radio" name="mode" value="review" checked><span><strong>先讓我確認</strong><small>客服先寫草稿，由你檢查後發送。</small></span></label><label class="radio"><input type="radio" name="mode" value="auto"><span><strong>自動回覆已知問題</strong><small>有已確認依據才回答。追問及例外仍交給你。</small></span></label><label for="handoff-contact">客人可以怎樣聯絡真人？</label><input id="handoff-contact" maxlength="300" placeholder="例如：留在這段對話等候客服"><p class="help">待辦放在「工作 → 客戶對話」。請安排人員查看，目前沒有電郵或手機通知。</p><button class="button primary" type="submit">儲存設定</button></form>
+          <section class="studio-setting-card"><h2>你的客服</h2><dl class="identity-list"><dt>名稱</dt><dd>BlueSAI-客服</dd><dt>Agent 編號</dt><dd>BlueSAi-Cs-#0001</dd></dl><hr><h2>連接狀態</h2><dl id="connection-status" class="identity-list"></dl><p class="service-note">已設定不代表已連線。正式發送前，先用測試帳號核對收發。</p><details class="advanced-help"><summary>接駁與資料說明</summary><p class="help">密鑰由管理員在伺服器設定，這裡不會顯示。訊息接駁採用 <a href="https://github.com/evolution-foundation/evolution-api" target="_blank" rel="noreferrer">Evolution API</a>，並依其授權使用。</p><p class="help">使用本次對話背景，未啟用跨次客戶記憶。程式碼開源不代表你的客戶資料公開。</p></details></section>
+        </div>
+      </section>
+      <footer class="service-footer">BlueSAI-客服 · 簡單說清楚，認真做好服務。</footer>
+    </main>
+  </div>
 </div>
-<div id="notice" role="status" aria-live="polite" hidden></div>
+<div id="notice" class="service-toast" role="status" aria-live="polite" hidden></div>
 </body></html>

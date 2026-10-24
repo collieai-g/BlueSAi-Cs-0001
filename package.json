@@ -1,6 +1,6 @@
 {
   "name": "bluesai-cs-0001",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "BlueSAI-客服：簡明回覆、已確認知識、人工接手與 Evolution API 接駁",

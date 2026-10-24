@@ -1,0 +1,34 @@
+{
+  "repository": "https://github.com/collieai-g/Blueprint-Studio-Open-Source",
+  "commit": "ea20229b1bbdb5cb55f42456d4b962d66d6898e7",
+  "version": "2.7.3",
+  "license": "MIT",
+  "normalization": "UTF-8, LF line endings",
+  "copiedFiles": [
+    {
+      "source": "library_web/style.css",
+      "path": "public/vendor/blueprint-style.css",
+      "sha256": "19d50e5646e3346dd335ca475c3478d4fd4986eea2393ec7207eb97e078297dd"
+    },
+    {
+      "source": "library_web/studio.css",
+      "path": "public/vendor/blueprint-studio.css",
+      "sha256": "da200c1a57a20c1f3f4dc182a53bfd9f625e948d29d096ae2b9d5be48909d4a8"
+    },
+    {
+      "source": "library_web/brand.svg",
+      "path": "public/brand.svg",
+      "sha256": "bd08702d4a8b549a866a8ec20c3ba55d1a98512e582fc08933a77818f3ca5f6f"
+    },
+    {
+      "source": "LICENSE",
+      "path": "public/vendor/LICENSE.blueprint",
+      "sha256": "b0b1fda3a52f707d53fba4515690e601c6ba23d4000a9d08b09e6be4f6cd05d3"
+    }
+  ],
+  "adaptedFiles": {
+    "public/index.html": "Shell, navigation and shared component class names; customer-service content.",
+    "public/app.js": "Inline icon paths; customer-service interaction code.",
+    "public/style.css": "Customer-service layout and mobile accessibility additions."
+  }
+}

@@ -22,6 +22,14 @@ WhatsApp → Evolution → Bearer 驗證 → 事件去重／持久 jobs
 
 `src/store.js` 管理資料及同步交易；`agent.js` 處理提示詞和模型協定；`engine.js` 管理接收、工作、人工狀態和發送；`evolution.js` 管理供應商適配；`server.js` 管理認證、驗證與 HTTP；`index.js` 管理生命週期。
 
+## 介面（v0.2.0）
+
+`public/index.html` 提供總覽、客戶對話、教客服、客服知識及設定五個視圖；主列與 Blueprint Studio 一樣是「總覽／工作／AI／資料」，設定在左下角。`public/app.js` 使用 hash 導覽與原有 HTTP API，仍為原生 JavaScript，沒有新增框架或建置步驟。
+
+`public/vendor/` 固定保存上游兩份 CSS 及 MIT 授權；`public/brand.svg` 沿用其品牌圖形。客服版面的補充樣式寫在 `public/style.css`，來源版本與雜湊記於 `UI_SOURCE.json`。伺服器只公開明列的靜態資源，沒有開放任意路徑讀取。
+
+總覽計數由 `/api/state` 的實際對話與知識計算。搜尋只在本次已載入的資料內進行。背景更新保留未儲存的表單，未改動的清單不重建；手機選單支援鍵盤焦點、Tab 循環及 Esc 關閉。瀏覽器只保存側欄寬窄偏好，商戶資料仍在原有 SQLite。這次沒有資料庫遷移。
+
 ## 不靠 prompt 執行的控制
 
 - 已確認且未過期的知識才進模型；待確認文字與客戶對話不會寫成正式知識。

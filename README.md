@@ -6,11 +6,12 @@
 
 一個可在本機運行的 AI 客服起步版本。商戶以普通說話設定服務，客服用簡短、專業的方式回答；不知道的事不預填，重要決定交給真人。
 
-**目前版本：0.1.0。單商戶、單程序、文字訊息 MVP，未宣稱已在真實 WhatsApp／OpenAI 帳戶上驗證。**
+**目前版本：0.2.0。單商戶、單程序、文字訊息 MVP，未宣稱已在真實 WhatsApp／OpenAI 帳戶上驗證。**
 
 ## 已有功能
 
-- 三個頁面：**對話、教客服、設定**。繁體中文介面，可用手機或電腦。
+- 沿用 Blueprint Studio 的原版樣式、圖示及品牌圖形：**總覽／工作／AI／資料**，設定在左下角。繁體中文介面，可用手機或電腦。
+- 總覽顯示實際待辦、對話、有效資料及回覆方式；對話與知識可搜尋。
 - 空白商戶設定、工作指令、親切／正式語氣。
 - 商戶知識的待確認／已確認狀態、有效期、刪除；對話內容不自動變成商戶政策。
 - 試聊與對話背景。未設 AI key 時，用明確標示的離線規則示範。
@@ -36,9 +37,9 @@ npm start
 
 資料預設存於使用者家目錄的 `.blueprint-service/`，**不在倉庫內**。首次開啟的商戶欄位和知識庫完全空白，真實發送預設關閉。這時可以離線試聊，不會呼叫付費 AI 或發送 WhatsApp 訊息。
 
-1. 在「教客服」填商戶名稱、服務及工作指令，按儲存。
-2. 加入資料，核對後勾選「可以用來回答客戶」。未確認／過期資料不使用。
-3. 試聊後到「對話」確認草稿，試接手、回覆及交回。
+1. 在「AI → 教客服」填商戶名稱、服務及工作指令，按儲存。
+2. 在「資料 → 客服知識」加入資料，核對後勾選「可以用來回答客戶」。未確認／過期資料不使用。
+3. 在「AI」試聊後，到「工作 → 客戶對話」確認草稿，試接手、回覆及交回。
 4. 需要實際 AI 或訊息渠道時，按 [安裝與連接](docs/INSTALL.md) 設定。
 
 ## 驗證
@@ -50,7 +51,21 @@ npm run check
 
 測試使用記憶體／暫存 SQLite、模擬 AI 和渠道，以及本機 HTTP，**不使用真實客戶、密鑰或 API 額度**。包括資料持久化、重複事件、人工接手競態、資料更新、來源過期、HTTP 驗證、發送窗口與未知結果等案例。
 
-目前保留 [產品設計](docs/PRODUCT.md)、[架構與限制](docs/ARCHITECTURE.md)、[安裝指南](docs/INSTALL.md)。請先閱讀這些文件再開啟真實發送。
+目前保留 [產品設計](docs/PRODUCT.md)、[架構與限制](docs/ARCHITECTURE.md)、[安裝指南](docs/INSTALL.md) 及 [驗證記錄](docs/VERIFICATION.md)。請先閱讀這些文件再開啟真實發送。
+
+## 藍圖工作室介面
+
+介面採用 [Blueprint Studio Open Source](https://github.com/collieai-g/Blueprint-Studio-Open-Source) v2.7.3 的共用視覺：白灰背景、方格底紋、224px 側欄、68px 頂列、按鈕及卡片。兩份原版 CSS 與品牌 SVG 保存在 `public/`，不依賴外部 CDN；客服內容及互動另外實作。
+
+| 主列 | 用途 |
+| --- | --- |
+| 總覽 | 查看待辦、最近對話，按三步準備客服 |
+| 工作 | 搜尋對話、確認草稿、人工接手及回覆 |
+| AI | 設定服務與工作指令，立即試聊 |
+| 資料 | 搜尋、加入及確認客服知識 |
+| 設定（左下角） | 回覆方式、人工聯絡方式、連接狀態、登出 |
+
+桌面側欄可收窄，手機使用抽屜選單；更新資料會保留尚未儲存的輸入。參考來源固定於 commit `ea20229b1bbdb5cb55f42456d4b962d66d6898e7`，記錄與檔案雜湊見 [UI_SOURCE.json](UI_SOURCE.json)，設計範圍見 [介面說明](docs/UI_DESIGN.md)。
 
 ## Evolution API 與授權
 
@@ -59,5 +74,7 @@ npm run check
 接口設計參考其 `fa09d37892cdbb1d65a250155d293d92230c5b30` 原始碼；當時 package 版本為 2.3.7。這不是對特定容器或帳戶已完成整合測試的聲明。Evolution 的授權包含額外條件，請依實際使用版本核對其 [LICENSE](https://github.com/evolution-foundation/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/LICENSE)。管理員設定頁保留使用通知。
 
 本倉庫的原創程式及文件採用 [MIT License](LICENSE)，允許使用、修改、分發及商業使用，須保留授權與版權聲明。Evolution API 等獨立服務仍依各自授權；本授權不授予第三方商標或服務權利。
+
+Blueprint Studio 的 CSS、品牌 SVG、圖示路徑及介面結構依其 MIT 授權使用；原版權與授權聲明保存在 [public/vendor/LICENSE.blueprint](public/vendor/LICENSE.blueprint)。
 
 `package.json` 的 `private: true` 只防止意外發佈至 npm，不影響本項目的開源授權或 GitHub 公開狀態。歡迎依 [參與指引](CONTRIBUTING.md) 提交改進。

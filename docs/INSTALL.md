@@ -52,7 +52,7 @@ Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl
 3. 僅開啟這個客服回覆途徑，關閉同一 instance 其他自動 bot，避免重複回答。
 4. Evolution 的 `AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES` 設為 false；按需要明確設定 telemetry。憑證不傳給模型。
 5. 先保持本服務 `DELIVERY_ENABLED=false`，用測試帳號來訊，確認接收、草稿、重複事件與人工接手。重啟之前／超過五分鐘／缺時間的來訊會列入人工待辦。
-6. 在「教客服」填商戶名稱、服務；在「設定」填人工聯絡方式。完成驗收後才明確設 `DELIVERY_ENABLED=true`。先用「先讓我確認」，再考慮「自動回覆已知問題」。
+6. 在「AI → 教客服」填商戶名稱、服務；在左下角「設定」填人工聯絡方式。完成驗收後才明確設 `DELIVERY_ENABLED=true`。先用「先讓我確認」，再考慮「自動回覆已知問題」。
 
 本接收端的驗證是 Bearer secret 配合 instance 比對，**不是 body HMAC 簽章**。外層需 HTTPS、限制來源／速率。若使用 Meta，供應商 webhook 的簽章驗證應在 Evolution 前的受控入口或經驗證的修正實作完成；此服務不冒充 Meta 原始入口。
 
@@ -66,7 +66,7 @@ Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl
 - `accepted` 只表示取得 provider message ID，未證明送達。本版未接入完整 `MESSAGES_UPDATE` 對帳。
 - `uncertain` 表示發送逾時、錯誤或回應不明。**不會自動重試**；人工先在 WhatsApp 核對，避免重複訊息。重啟時原本 `sending` 的工作也轉為 `uncertain`。
 - 接手取消尚未發出的草稿／佇列；已送往供應商的在途訊息可能仍然發出。介面會顯示發送中或未確認狀態。
-- 人工待辦只顯示在「對話」，目前沒有推送通知。安排操作員查看，不能把已入列當成已通知外部人員。
+- 人工待辦顯示在「總覽」及「工作 → 客戶對話」，目前沒有推送通知。安排操作員查看，不能把已入列當成已通知外部人員。
 
 ## 儲存、備份、重啟
 

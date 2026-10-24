@@ -8,5 +8,6 @@
 - 人工接手、資料批准、發送開關、來源有效性及版本檢查必須在程式落實，不能只靠 prompt。
 - 未明確授權實際發送時，不連接真實客戶渠道。測試使用暫存資料和模擬 provider。
 - 修改後執行 npm test 及 npm run check。涉及介面時，用瀏覽器驗證主要操作和手機版面。
+- 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服補充樣式放 public/style.css。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
 - 所有對外狀態必須依實際結果：configured 不是 connected，accepted 不是 delivered，repository written 不是 deployed。
 - 未獲使用者明確授權，不要更改 GitHub 倉庫可見性、覆寫他人提交或加入付費資源。
