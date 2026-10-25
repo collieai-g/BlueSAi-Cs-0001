@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "agent_id": "bluesai-cs-0001",
+  "status": "requires_setup",
+  "purpose": "Reviewed component source boundary for the native host renderer; this metadata does not install a renderer or authorize HTML/script injection.",
+  "required_renderer": "bluesai-management/1",
+  "required_api": "bluesai-management-api/1",
+  "api_namespace": "/api/agents/bluesai-cs-0001",
+  "root_selector": "#cs-card-design",
+  "item_count": 1,
+  "states": ["entry", "configuration"],
+  "assets": {
+    "markup": "public/agent-card.html",
+    "stylesheet": "public/agent-card.css",
+    "scripts_in_order": ["public/workbench-api.js", "public/agent-handoff.js", "public/workbench.js"]
+  },
+  "asset_allowlist": [
+    "public/agent-card.html",
+    "public/agent-card.css",
+    "public/workbench-api.js",
+    "public/agent-handoff.js",
+    "public/workbench.js"
+  ],
+  "forbidden_host_bundle_assets": [
+    "public/index.html",
+    "public/app.js",
+    "public/style.css",
+    "public/workbench.html",
+    "public/workbench.css"
+  ],
+  "host_rules": {
+    "native_renderer_required": true,
+    "raw_html_or_script_injection": "forbidden",
+    "iframe_fallback": "forbidden",
+    "global_css_or_route_replacement": "forbidden",
+    "overview_work_data_writes": "forbidden",
+    "private_host_installation": "not_verified"
+  }
+}

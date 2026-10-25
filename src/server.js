@@ -48,9 +48,18 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
-      const path = new URL(req.url, 'http://localhost').pathname;
+      const requestedPath = new URL(req.url, 'http://localhost').pathname;
+      // Only this service's card namespace is dispatched here. Host routes and
+      // host storage are never mounted or replaced by this server.
+      const cardBase = '/api/agents/bluesai-cs-0001';
+      const cardTail = requestedPath.startsWith(cardBase + '/') ? requestedPath.slice(cardBase.length) : null;
+      let path = cardTail === '/login' ? '/api/login' : cardTail === '/logout' ? '/api/logout'
+        : cardTail === '/state' ? '/api/workbench' : cardTail ? '/api/workbench' + cardTail : requestedPath;
       const method = req.method;
       if (path === '/healthz' && method === 'GET') return json(res, 200, { status: 'ok' });
+      if (path === '/console' && method === 'GET') {
+        res.writeHead(303, { Location: '/workbench.html' }); return res.end();
+      }
       if (await webChat(req, res, path)) return;
       if (path === '/webhooks/evolution' && method === 'POST') {
         if (!webhookSecret || !engine.evolution.instance || !equal(req.headers.authorization, `Bearer ${webhookSecret}`)) throw new ServiceError('未獲授權。', 401);
@@ -151,8 +160,11 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           if(method==='POST'&&action==='whatsapp-check')return json(res,200,await workbench.checkWhatsApp());
           if(method==='POST'&&action==='whatsapp-webhook')return json(res,200,await workbench.registerWebhook());
           if(method==='POST'&&action==='whatsapp-webhook-check')return json(res,200,await workbench.checkWebhook());
+          if(method==='POST'&&action==='whatsapp-test-recipients')return json(res,200,await workbench.configureTestRecipient(await body(req)));
           if(method==='DELETE'&&action==='whatsapp'){await workbench.clearWhatsApp();return json(res,200,{ok:true});}
         }
+        if (workbench && path === '/api/workbench/conversations' && method === 'GET') return json(res,200,{conversations:store.conversations()});
+        if (workbench && /^\/api\/workbench\/(knowledge|conversations|messages)\//.test(path)) path = path.replace('/api/workbench/', '/api/');
         if (path === '/api/state' && method === 'GET') return json(res, 200, {
           profile: store.value('profile'), settings: store.value('settings'), knowledge: store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
           conversations: store.conversations(), runtime: runtime(), identity,
@@ -226,7 +238,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (approval && method === 'POST') { const input = await body(req); engine.approve(approval[1], string(input.text,4000,false)); return json(res,200,{ok:true}); }
         throw new ServiceError('找不到此操作。', 404);
       }
-      const assets = { '/': [workbench&&!runtimeMode?'workbench.html':'index.html','text/html; charset=utf-8'], '/console': ['index.html','text/html; charset=utf-8'], '/workbench.html':['workbench.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+      const assets = { '/': ['workbench.html','text/html; charset=utf-8'], '/diagnostics/console': ['index.html','text/html; charset=utf-8'], '/workbench.html':['workbench.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
         '/chat':['chat.html','text/html; charset=utf-8'], '/chat.js':['chat.js','text/javascript; charset=utf-8'], '/chat.css':['chat.css','text/css; charset=utf-8'],
         '/workbench.js':['workbench.js','text/javascript; charset=utf-8'], '/workbench-api.js':['workbench-api.js','text/javascript; charset=utf-8'], '/workbench.css':['workbench.css','text/css; charset=utf-8'],
         '/agent-handoff.js':['agent-handoff.js','text/javascript; charset=utf-8'],

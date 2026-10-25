@@ -40,7 +40,7 @@ try {
   const evolution = createEvolution(providerConfig);
   engine = new Engine(store, agent, evolution);
   const connections = createConnections({ engine, store, runtime: true, providerConfig,
-    aiConfig: { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL }, publicBaseUrl: env.PUBLIC_BASE_URL, webhookSecret: env.WEBHOOK_SECRET });
+    aiConfig: { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL }, publicBaseUrl: env.PUBLIC_BASE_URL, webhookSecret: env.WEBHOOK_SECRET, localWhatsAppTest: env.LOCAL_WHATSAPP_TEST === 'true' });
   server = createApp({ store, engine, adminToken: token, webhookSecret: env.WEBHOOK_SECRET, cookieSecure: env.COOKIE_SECURE === 'true', workbench: connections, runtimeMode: true, webChatEnabled: env.WEB_CHAT_ENABLED === 'true' });
   const port = Number(env.PORT || 3100); const host = env.HOST || '127.0.0.1';
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 不正確。');

@@ -1,4 +1,6 @@
-# Blueprint 整合套件 0.3.0-preview.1
+# Blueprint 整合套件 0.3.0-preview.2
+
+單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](../../docs/AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
 
 `agent.json` 是符合 `blueprint-agent/1` 的可登記 manifest，保留產品顯示身份，宿主 ID 為 `bluesai-cs-0001`。它提供共用 standard 控制項的按需草稿操作。宿主 `1157aa49538b402e7a54996068e845c44abecb8f` 的公開合約已核對；登記不會安裝 Node 程式、啟動 WhatsApp 或產生原生三分頁。
 

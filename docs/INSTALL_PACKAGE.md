@@ -1,6 +1,8 @@
 # 版本化安裝套件與更新
 
-本版是 `0.3.0-preview.1` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
+單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
+
+本版是 `0.3.0-preview.2` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
 
 ## 先選交付模式
 
@@ -126,7 +128,7 @@ const receipt = await installer.ensure({
 提交並保持 checkout 乾淨後，使用**新的、倉庫外絕對目錄**：
 
 ```powershell
-npm run package:release -- --output C:\Private\bluesai-release-0.3.0-preview.1
+npm run package:release -- --output C:\Private\bluesai-release-0.3.0-preview.2
 ```
 
 產出 `source.tar` 及 `release.json`。後者保存完整來源 commit、套件版本、preview 標記、宿主合約參考、檔案 inventory SHA-256 及 tar SHA-256。雜湊以 Git commit 的實際 blob bytes 計算，不受 Windows 工作副本換行影響。已存在的輸出目錄、dirty checkout、倉庫內輸出或未經審閱的 symlink 會被拒絕。生成物不回寫到來源，因此沒有把自身 commit 寫回 manifest 的循環問題。

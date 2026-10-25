@@ -1,91 +1,60 @@
-# 實作架構與邊界
+# 客服卡片與執行器架構
 
-## 藍圖工作室內置插件方向
+版本：0.3.0-preview.2。權威介面及資料邊界見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
 
-本產品專為藍圖工作室設計，介面及卡片行為遵循 [插件設計規格](BLUEPRINT_PLUGIN_DESIGN.md)。宿主負責外層導覽、身份權限、卡片註冊、移動／縮放與排版偏好；插件負責客服設定、訓練記憶及渠道狀態。固定尺寸範圍目前是整合規格，尚未接到原生排版引擎。
+## 宿主中的一個 Agent
 
-`src/workbench.js` 提供獨立 3101 本機實測入口，使用自己的資料目錄和登入 cookie；`src/connections.js` 管理記憶體內的接駁憑證及驗證。這個入口不啟動對客發送 worker，也不提供 webhook。`design/customer-agent-card-design.html` 的三分頁卡片經建置成 `public/workbench.*`，HTTP 操作另外放在 `public/workbench-api.js`。本機外殼不等於已安裝到工作室；正式嵌入前仍須實作宿主認證及資料範圍。
+Blueprint Studio 提供外層工作空間、身份、導覽、主題及排版。客服是「AI → Agent 工作台」內的一個已登記項目；入口和配置為同一項目的狀態，配置只含基本設定／訓練／接駁三個分頁。自己的對話、草稿及人工回覆亦在卡片內容區處理。
 
-以下描述 3100 客服服務與共用核心；後續工作以 [開發計劃](DEVELOPMENT_PLAN.md) 為準。工作室內提供卡片入口，客服執行器及後台獨立運行及部署。
+客服不載入另一套總覽、工作或資料網站，不覆寫宿主的這些內容、全域路由、CSS 或資料表。只有自己的 Agent 登記／設定及經宿主管理的卡片排版可以更新。讀取公司資料需要另外明確授權的受限整合，不能由卡片擴成全域寫入權限。
 
-工作台另提供 [Codex／DOT 協作流程](CODEX_DOT_HANDOFF.md)：`src/dot-tasks.js` 保存不可變任務快照，`public/agent-handoff.js` 在按鍵事件內呼叫原生交接，並提供只限當前選定任務的網站工具。使用者沿用目前 AI 對話；這條路不需要額外模型金鑰。原生請求獲接受、使用者送出、Agent 執行及結果保存是不同狀態。保存的結果仍是待核對草稿，不進對客發送佇列。
-
-## 實作選擇
-
-第一版將原設計落地為 Node.js 24、原生 JavaScript ES modules、SQLite 和靜態前端。省去套件安裝與建置，方便在 Windows／Linux 檢查。這是單商戶單程序的起步實作；大規模版本再遷移 PostgreSQL／工作佇列及租戶權限。
+## 程式與資料流
 
 ```text
-商戶瀏覽器 → 管理員 session → HTTP API → SQLite
-                                       ↕
-WhatsApp → Evolution → Bearer 驗證 → 事件去重／持久 jobs
-                                       ↓
-                               已確認資料 + 最近對話
-                                       ↓
-                              離線規則 / OpenAI Responses
-                                       ↓
-                                 草稿 / 發送佇列
-                                       ↓
-                       重查人工狀態、版本、來源有效期、發送窗口
-                                       ↓
-                            Evolution sendText（預設關閉）
+宿主 Agent 工作台
+  └─ 一個客服卡片根節點
+       └─ /api/agents/bluesai-cs-0001（目前公司與 instance 的受限 adapter）
+            └─ 獨立客服 Engine + 私人 SQLite
+
+指定測試 WhatsApp 手機
+  ↔ 真實連結裝置服務／Evolution instance
+  → 認證 webhook → 去重、指定對話、持久工作及期限
+  → 已批准知識 + 模型／人工處理
+  → 卡片內待核對草稿／人工接手
+  → 版本、來源、人工狀態、發送範圍及窗口檢查
+  → provider 接受 → 可對應送達／已讀回執
 ```
 
-`src/store.js` 管理資料及同步交易；`agent.js` 處理提示詞和模型協定；`engine.js` 管理接收、工作、人工狀態和發送；`evolution.js` 管理供應商適配；`server.js` 管理認證、驗證與 HTTP；`index.js` 管理生命週期。
+`src/store.js` 負責資料及同步交易；`agent.js` 處理模型協定；`engine.js` 管理接收、期限、人工控制和發送；`evolution.js` 適配供應商協定；`connections.js` 負責真實探測與接駁；`server.js` 提供認證及命名空間接口；`index.js` 管理生命週期。
 
-## 介面（v0.3.0-preview.1）
+`design/customer-agent-card-design.html` 經 `tools/build-workbench.py` 產生 `public/workbench.*`。本機 `/`、`/workbench.html` 及相容 `/console` 入口均呈現卡片。舊 `public/index.html`／`public/app.js` 整頁工具只在 `/diagnostics/console` 作獨立診斷，不屬於正式 Agent UI 或宿主安裝流程。
 
-`public/index.html` 提供總覽、客戶對話、教客服、客服知識及設定五個視圖；主列與 Blueprint Studio 一樣是「總覽／工作／AI／資料」，設定在左下角。`public/app.js` 使用 hash 導覽與原有 HTTP API，仍為原生 JavaScript，沒有新增框架或建置步驟。
+卡片前端只使用 `/api/agents/bluesai-cs-0001`。客服獨立服務內部的 `/api/workbench` 及舊相容 API 不授權宿主代理整個 `/api`，亦不代表多租戶身份隔離已完成。3101 預覽仍為自己的資料目錄，沒有收發 worker；實際手機測試使用真正執行器。
 
-`public/vendor/` 固定保存上游兩份 CSS 及 MIT 授權；`public/brand.svg` 沿用其品牌圖形。客服版面的補充樣式寫在 `public/style.css`，來源版本與雜湊記於 `UI_SOURCE.json`。伺服器只公開明列的靜態資源，沒有開放任意路徑讀取。
+## 儲存與不可跨越的控制
 
-總覽計數由 `/api/state` 的實際對話與知識計算。搜尋只在本次已載入的資料內進行。背景更新保留未儲存的表單，未改動的清單不重建；手機選單支援鍵盤焦點、Tab 循環及 Esc 關閉。瀏覽器只保存側欄寬窄偏好，商戶資料仍在原有 SQLite。
+每個部署只服務一個商戶、一個渠道身份、一個程序及一份倉庫外 SQLite。宿主資料庫不直接共用；若日後實作 Sites D1 適配，須有專屬命名空間、公司身份、版本及備份 coverage，不能改寫宿主原有表或套用新站資料庫覆蓋。
 
-## 不靠 prompt 執行的控制
+- 商戶未知欄位保持空白。已批准、仍有效的知識才進模型；對話不會自動變成政策。
+- 新來訊及人工接手增加對話版本。資料 revision 或來源有效性改變後，舊生成結果、草稿及未提交訊息不能沿用。
+- 人工狀態持久保存；只有明確交回才恢復 AI。超時監察獨立於模型等待。
+- 未完成動作不得由模型聲稱已退款、預約、通知或改單。模型沒有這些執行工具。
+- 發送前重查人工狀態、來源、版本、發送開關、測試範圍及窗口。在途訊息不能保證撤回；不明結果不自動重發。
 
-- 已確認且未過期的知識才進模型；待確認文字與客戶對話不會寫成正式知識。
-- 所有模型輸出驗證類型、長度、決定種類和來源 ID；無來源事實答案、未知來源、未完成結果轉人工。
-- 模型沒有退款、查單、付款、預約或任意工具權限。已完成動作措辭有額外攔截，仍需真實語言評估，不能當成完整語意證明。
-- 對話 `version` 隨新來訊及人工接手改變。舊生成結果、舊草稿和未發出訊息不能沿用。
-- 商戶資料有全域 revision；修改資料使舊 AI 草稿失效，生成期間改動會重新生成仍未處理的當前請求。
-- 人工狀態 `ai / waiting / human` 持久保存。只有明確 resume 才恢復，新來訊不會自行解除人工接手。
-- provider ID／channel 事件去重。未支援、舊資料只留人工處理，不會默默批量回覆歷史。
+schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／DOT 任務，v3 保存 provider instance、回執 inbox 及觀察，v4 保存受限網頁會話。遷移前正常停止、備份及驗證還原；不重建商戶資料或默默啟用發送。
 
-## 可靠性界線
+## 真實渠道與驗收範圍
 
-收到來訊後同步寫入事件、訊息、job 及新一輪回覆期限，才確認接收。短時間連續來訊會讓舊版本工作失效，以最新背景生成一次，但沿用最早未處理問題的期限。
+本機連結裝置橋接與客服可同機 loopback 運行，不需要把本機管理頁公開。第三方 Baileys 路線不是 Meta Cloud API；登入資料只在私人渠道目錄，指定測試 allowlist 同時限制來訊轉送及發送。空名單只允許 QR／連線狀態，不把其他客戶訊息送進客服或模型。
 
-第一個可靠交接里程碑加入版本化增量遷移、response_windows 與 handoff_tasks。獨立監察不等待模型；到期在同一交易內轉人工、取消未提交回覆並建立本地交接工作。生成與發送分開保護，人工回覆可在舊模型仍等待時繼續。草稿或排隊不算已提交，跨過供應商提交邊界才結束該輪期限。重啟立即補處理過期期限；舊歷史不倒填期限。詳細狀態與驗收見 [可靠交接流程](RELIABLE_HANDOFF.md)。
+Evolution 可作為獨立供應商；遠端服務須核對真正 callback 的 HTTPS 可達性與身份。兩種方式都不把手機 open 當作客服已收件。實際設定見 [WHATSAPP_RUNTIME.md](WHATSAPP_RUNTIME.md)。
 
-發送前再次檢查人工狀態、版本、來源有效性、設定及 24 小時窗口。網絡已開始後不能撤回；結果不明絕不盲目重發。單程序鎖避免兩個程序共用同一 SQLite 佇列。
+`accepted` 只表示取得 provider ID。回執按 instance、電話及 ID 配對，先到 callback 持久保存，重複／較舊結果不降級 delivered／read。群組、廣播、無法可靠映射的 LID、媒體及未知形狀不猜配。未對應的手機發訊息保守轉人工；發送回聲早於 HTTP 回應也可能如此處理。
 
-Evolution 自己的 webhook 重試並非持久傳送保證。本服務不能補回根本沒有收到的事件；需要營運監控和上游補償機制。`messages.upsert` 亦不足以證明來訊完全新鮮：本版以啟動時間、五分鐘時限和去重作保守處理；無法可靠辨識的較新 append 事件仍須在實際渠道驗收。
+網頁客人入口是獨立可選渠道，只公開自己的已提交內容，瀏覽器 ACK 才標送達。離線規則和模擬 provider 用於程式測試，不能替代真實 WhatsApp 手機驗收。
 
-自己發出的 provider ID 回聲會忽略。尚未取得回應 ID 的回聲與人工發訊息可能無法區分，本版保守暫停 AI，避免對話迴圈；後續應加入完整 send-event 對帳。
+## 宿主能力不足時
 
-## 現階段限制
+原生協作 manifest、只讀 preflight、安裝 journal、備份 coverage 及 CAS 登記 client 見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。它們不自動部署後台，也不會啟動目前 Codex 對話成為持續 AI。
 
-- 一個部署只有一個商戶、一個管理員 token、一個 Evolution instance。**不能作共享多租戶服務**。
-- 只接收標準電話 JID 的單對單文字。LID-only、群組等不支援；非文字會進人工待辦，不能在本介面看附件。
-- 最近 24 則有效對話作上下文，沒有長期記憶、摘要壓縮或跨次個人化資料庫。對話可以刪除。
-- 知識來源追蹤目前是 ID、配置 revision 及操作稽核，沒有不可變的全文版本庫。
-- 模型輸出有 schema 及來源檢查，但來源 ID 正確不保證每句話語意正確。開啟自動模式前須做商戶專屬評估；先審後發是預設。
-- 離線模式只用固定類別示範，不執行任意自訂指令；不假裝完整 AI。
-- 已收認證 `MESSAGES_UPDATE` 並持久、按 instance／地址／ID 配對送達回執。編輯／刪除、模板、LID 映射及主動查詢未知 send 結果仍未支援。`accepted` 不能當成 delivered。
-- 沒有外部人工通知、完整客服 SLA、帳戶密碼找回、角色權限或操作員分配。
-- 手動資料刪除已提供；保留期、資料匯出、合規告知和備份刪除需按正式業務補齊。
-
-## 證據與測試
-
-Evolution 接口設計依原始碼 `fa09d37892cdbb1d65a250155d293d92230c5b30`：事件 controller、sendMessage route、auth guard、Baileys/Meta channel。上一階段 REA 打包分析遇到記憶體上限，不能聲稱已完整還原。這次未執行上游程式或複製其前端。
-
-自動測試涵蓋：空白事實、待審與過期資料、去重與重啟、接手競態、舊版本取消、保留期檢查、模型失敗、逾時不重發、24 小時窗口、短時間連續來訊、事件適配、錯誤形狀的 201、模型來源驗證、登入／CSRF／webhook 驗證。
-
-外部 AI、Evolution、WhatsApp、DNS／TLS、付費帳戶及生產備份未在本次本機測試中驗證。正式連接需以測試帳號完成這些步驟。
-
-## 0.3 接駁引導、客人入口及套件
-
-`index.js` 現在把 `createConnections` 與原有 Engine／Store 綁定，同一服務提供 `/workbench.html` 及 `/console`。接駁頁有 WhatsApp／網頁四步教學，缺少服務時只整理可核對的安裝指引草稿，不偽造二維碼或 connected。3101 仍保留原有隔離行為。
-
-`src/web-chat.js` 在明確開啟後提供獨立 guest cookie 及 token 雜湊會話，使用同一 Engine；只公開該會話的已提交內容，瀏覽器 ACK 才標送達。schema v3 保存 provider instance、回執 inbox 及觀察；v4 保存客人會話。現有設定、批准及人工接手保留。
-
-`src/install.js` 提供只讀 capability preflight 和倉庫外安裝 journal；`install-blueprint.js` 提供原生 authenticated-client 登記及同 ID 讀回。固定來源發佈、備份 coverage、CAS／重跑及不支援 Sites 的界線詳見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。
+完整通用 Sites renderer／D1 管理 API、宿主 manifest 原地升級與私人工作室現場驗收仍待完成。缺項必須阻擋相應安裝並說明下一步，不以搬入整頁客服或覆蓋宿主主列補位。歷史測試與舊截圖只屬當時版本的證據。
