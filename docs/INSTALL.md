@@ -1,10 +1,12 @@
 # 安裝與連接
 
+0.3.0-preview.1 新增 [版本化安裝套件與 preflight](INSTALL_PACKAGE.md)、[按鍵接駁教學](CONNECTION_GUIDE.md) 及 [共用 WhatsApp 執行器](WHATSAPP_RUNTIME.md)。先做只讀 preflight，再按相容性決定備份及變更；尚未支援的 Sites renderer／API 不會被當成已安裝。
+
 ## 安裝到既有藍圖工作室（含 GitHub 及 Site）
 
 從 [README 的可複製指示](../README.md#貼給-codexdot安裝到藍圖工作室)開始，或把 [INSTALL_AI.txt](../INSTALL_AI.txt) 的全文交給目前的 Codex／DOT。這個入口適用於「把客服加入已有工作室」，會處理所需的程式整合、GitHub 提交與原 Site 更新。它不會因為找到舊工作室就另建一個工作室。
 
-**目前是 AI 執行的整合指引，尚非已通過宿主安裝驗收的套件。** 下文是安裝 AI 要落實的工作；文件發佈不代表已安裝到任何使用者的 Site。
+**目前是預覽套件：原生協作 manifest／登記 client 已用固定合約 fixture 驗證；完整 Sites 管理 renderer／API 仍未實作及驗收。** 下文是安裝 AI 要落實的工作；文件發佈不代表已安裝到任何使用者的 Site。
 
 ### 使用者只需提供
 
@@ -15,7 +17,7 @@
 ### 安裝 AI 的執行順序
 
 1. **確認同一個目標。** 核對工作室網址、公司／工作空間、實際 GitHub 來源及分支、Site ID、部署模式、資料位置和現有權限。公開藍圖倉庫是參考來源，不一定是使用者正在運行的來源；Site 的來源倉庫也未必等於 GitHub 倉庫。已有私人安裝記錄就接續，不重建服務或資料庫。
-2. **固定來源並備份。** 讀取雙方的 `AGENTS.md`、README、安裝及架構文件。核實客服 Releases；若沒有正式發行版，明確使用本協作預覽的已核對完整 commit，不能稱為最新正式版。記錄宿主與客服的來源 commit，保留修改、MIT 聲明及可恢復的資料備份；不要因加入客服而順便升級整個工作室。
+2. **只讀 preflight、固定來源再備份。** 讀取雙方的 `AGENTS.md`、README、安裝及架構文件。核實客服 Releases；若沒有正式發行版，明確使用本協作預覽的已核對完整 commit，不能稱為最新正式版。記錄宿主與客服的來源 commit，保留修改、MIT 聲明及可恢復的資料備份；不要因加入客服而順便升級整個工作室。
 3. **補齊宿主相容層。** 依目標版本的 `docs/AGENT_CONTRACT.md`、`templates/agent/agent.json`、`docs/INTEGRATION_GUIDE.md` 及 `contracts/integration-v1` 實作。先核對正式部署回報的能力，不能只看公開原始碼。本倉庫的 `agent.json` 是產品身份，不能原封不動提交為宿主 manifest。把相容 manifest／adapter 作為獨立、可審核的通用程式保存，保留 `BlueSAi-Cs-#0001` 顯示身份；宿主識別欄位依其格式規則映射，記錄映射而不猜欄位。
 4. **加入原生客服入口。** 以宿主真正支援的登記及版本檢查加入「AI → Agent 工作台 → 客服 AI」卡片；相容接口已存在時，優先用登記及設定完成。需要原始碼改動時才修改目標工作室來源。配置內容保持「基本設定／訓練／接駁」同一卡片，沿用宿主外層導覽；本機頁面的側欄與頂列不再嵌入。卡片移動、縮放與最小／最大尺寸按 [原生卡片規格](BLUEPRINT_PLUGIN_DESIGN.md)實作及驗收，沒有支援時列作待補功能。
 5. **部署及連接客服後台。** 本版客服使用 Node.js 24.22+（24.x）、單程序 SQLite，服務及私人持久資料與工作室分開。實作明確的插件 API 命名空間、宿主身份／公司範圍及服務憑證；不要把宿主整個 `/api` 轉送到客服，或把管理員 token 放入前端。資料同步須按實際支援的 Integration Contract 實作受限 client，包含來源版本、撤銷、冪等及斷線恢復；不共用或直接改寫宿主資料庫。
@@ -38,7 +40,7 @@
 
 Sites 的伺服器程式運行於 Workers；現有 Node HTTP／`node:sqlite` 常駐服務及本機 SQLite 檔案不能原封不動當成 Sites 後台。優先保留獨立 Node 客服服務，使用經授權的 HTTPS 連接及伺服器身份橋接；如果選擇平台移植，須另實作並驗證全部資料及身份行為。`127.0.0.1:3101` 不是雲端後台地址；現有工作台亦不允許 iframe 嵌入，網站工具只在頂層註冊，不能用 iframe 載入整頁代替原生整合。
 
-`blueprint-agent/1` 的登記／連接與外部資料 Integration Contract 是不同能力；前者不會下載並執行本倉庫的 Node 程式，也不會自動啟動 DOT 或 WhatsApp。真實 WhatsApp 掃碼、模型供應商金鑰及自動對客發送仍按使用者選擇另行設定；安裝階段保持草稿與發送關閉。AI 協作不另要模型金鑰，不代表服務之間可以省略身份驗證。
+`blueprint-agent/1` 的登記／連接與外部資料 Integration Contract 是不同能力；前者不會下載並執行本倉庫的 Node 程式，也不會自動啟動 DOT 或 WhatsApp。接駁頁提供手機掃碼及網頁連結四步教學；真實 WhatsApp 掃碼、模型供應商金鑰及自動對客發送仍按使用者選擇另行設定；安裝階段保持草稿與發送關閉。AI 協作不另要模型金鑰，不代表服務之間可以省略身份驗證。
 
 ### 完成後要交付的結果
 
@@ -76,6 +78,8 @@ Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | 兩項都有值才呼叫 OpenAI；模型須支援 Responses 與 Structured Outputs |
 | `EVOLUTION_URL` / `EVOLUTION_INSTANCE` / `EVOLUTION_API_KEY` | Evolution 服務位址、instance 名稱及該 instance 憑證 |
 | `WEBHOOK_SECRET` | 至少 32 個隨機字元，用於接收端 Bearer 驗證 |
+| `PUBLIC_BASE_URL` | 客服 HTTPS origin，用來設定及核對 `/webhooks/evolution`；loopback HTTP 只限同機開發 |
+| `WEB_CHAT_ENABLED` | 預設 false；明確開啟受限 `/chat` 客人入口，不會開啟 WhatsApp 發送 |
 | `DELIVERY_ENABLED` | 預設 false；明確設 true 才容許真實發送 |
 
 以密碼管理器或伺服器秘密管理功能填寫密鑰，不要在聊天、Git、截圖或日誌公開。`.env`、SQLite 和日誌已被 Git 忽略；正式部署仍須核對檔案權限，Windows 上亦要限制資料目錄 ACL。
@@ -103,7 +107,7 @@ Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl
     "headers": { "Authorization": "Bearer YOUR_RANDOM_WEBHOOK_SECRET" },
     "byEvents": false,
     "base64": false,
-    "events": ["MESSAGES_UPSERT"]
+    "events": ["MESSAGES_UPSERT", "MESSAGES_UPDATE"]
   }
 }
 ```
@@ -122,7 +126,7 @@ Node.js 24.22+（24.x）、一個本機程序即可。`npm start` 啟動，`Ctrl
 - 超過客戶最後來訊 24 小時，本版不發一般訊息；不支援範本，需在其他獲授權工具處理。依 [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/)核對最新要求。
 - 自動模式只發送有有效來源的 `answer`。追問、退款／例外及模型故障保留草稿或轉人工。離線規則不會自動發到真實渠道。
 - 人工模式可直接回覆，但仍受真實發送開關和 24 小時窗口限制。
-- `accepted` 只表示取得 provider message ID，未證明送達。本版未接入完整 `MESSAGES_UPDATE` 對帳。
+- `accepted` 只表示取得 provider message ID。此版新增持久 `MESSAGES_UPDATE` inbox，按 instance／電話／provider ID 配對，收到相應回執才標 delivered／read；不主動查詢未知 send 結果，不能假稱完整供應商對帳。
 - `uncertain` 表示發送逾時、錯誤或回應不明。**不會自動重試**；人工先在 WhatsApp 核對，避免重複訊息。重啟時原本 `sending` 的工作也轉為 `uncertain`。
 - 接手取消尚未發出的草稿／佇列；已送往供應商的在途訊息可能仍然發出。介面會顯示發送中或未確認狀態。
 - 人工待辦顯示在「總覽」及「工作 → 客戶對話」，目前沒有推送通知。安排操作員查看，不能把已入列當成已通知外部人員。
@@ -144,3 +148,7 @@ Cookie session 在記憶體內，重啟後要重新登入；商戶資料、對�
 可先在本機開發，或在一台有持久磁碟的伺服器運行。正式公開網絡前需 HTTPS 反向代理、存取與速率限制、備份還原演練、日誌監控、渠道測試及資料告知。公開服務設定 `COOKIE_SECURE=true`，反向代理保留正確 Host；不要把管理介面直接裸露在互聯網。
 
 這個倉庫已寫入程式碼不代表正式服務已部署，也不代表已開通任何付費資源或帳戶。
+
+## 本版接駁教學與共用服務
+
+執行 `npm start` 後，開啟 `/workbench.html` 配置及閱讀逐步教學，開啟 `/console` 處理同一份對話。原有 3101 `npm run workbench` 保留隔離資料；不要把其手機 QR 測試當成客服執行器已啟動。詳細設定、遷移 v3／v4、渠道身份保護及收發驗收見 [WHATSAPP_RUNTIME.md](WHATSAPP_RUNTIME.md)。

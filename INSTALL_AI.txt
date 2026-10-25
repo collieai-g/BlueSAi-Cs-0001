@@ -1,30 +1,26 @@
-請把 BlueSAi-Cs-0001「藍圖工作室客服 AI」安裝到我指定的現有藍圖工作室，完成需要的 GitHub 倉庫整合、原有 Site 更新與安裝驗證。整體以 Codex 與 DOT 配合；DOT 指目前宿主的智能 Agent。
+請按固定版本的 BlueSAi-Cs-0001 套件，安裝或更新我已指定的藍圖工作室客服 Agent。
+來源：https://github.com/collieai-g/BlueSAi-Cs-0001
 
-客服來源：https://github.com/collieai-g/BlueSAi-Cs-0001
-先讀來源的 AGENTS.md、README.md、docs/INSTALL.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md，再依下列範圍完成工作。這份是 AI 執行的安裝整合指引，不是已存在的自動安裝程式；本版 agent.json 是產品身份資料，仍須補齊與目標工作室相容的 manifest／adapter。
+先讀 AGENTS.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.3.0-preview.1 是預覽；沒有正式 Release 時，不把 main 或歷史私人適配稱作正式版。
 
-1. 沿用我已指定的工作室、公司、GitHub 來源和 Site。先從目前對話、私人安裝記錄及工具核對真正網址、部署來源、分支、Site ID、儲存與權限；無法唯一辨認才請我提供目標網址。公開藍圖倉庫不一定是實際工作室的部署來源，Site 來源亦未必等於 GitHub。不要另建工作室、重設資料或改變目前存取範圍。
+1. 沿用目前已核實的工作室、公司、平台、GitHub、Site 及安裝 operation_id。先用只讀 preflight 核對實際宿主來源 commit、合約、renderer、API、資料域及模式；在變更或備份之前列出 unsupported 缺項。只有未決而必要的選擇才問用戶，不重新索取已知身份或秘密。
 
-2. 讀取客服及宿主的實際版本指引，核對 Releases 並固定完整 commit。沒有正式 release 時，明確記錄使用經核對的協作預覽，不把 main 稱作正式版。先保存可恢復備份，保留原有未提交修改、歷史、登入、資料及 MIT 聲明。不要為加裝客服順便升級整個工作室。
+2. 分開 collaboration、web-chat、whatsapp 及持續 AI。接駁頁要提供「接駁 WhatsApp」及「接駁網頁」四步教學。用戶只要求教學或版面時，完成引導及原有功能更新；不因此啟用帳戶、發送、付費服務或公開主機。教學的安裝指引按鍵只準備步驟草稿，實際安裝依另外明確的用戶指示。
 
-3. 依目標版本的 docs/AGENT_CONTRACT.md、templates/agent/agent.json、docs/INTEGRATION_GUIDE.md 及 contracts/integration-v1 實作缺少的相容層，並核對真正部署的能力。不能把本倉庫 agent.json 直接當作宿主安裝 manifest。已有接口可登記時使用正式接口及版本檢查；缺少程式能力時，在適當來源實作、測試後再登記。保留 BlueSAi-Cs-#0001 顯示身份，不重複新增同一 Agent。
+3. 固定含套件 manifest 的完整客服 commit，核對 source.tar／release.json 雜湊。使用 integrations/blueprint/agent.json 的 bluesai-cs-0001；根目錄 agent.json 只是產品顯示身份 BlueSAi-Cs-#0001。正常受支援安裝使用已驗證套件，不在現場重寫核心 UI／API。
 
-4. 在「AI → Agent 工作台」加入客服卡片。配置內容用同一張卡片的「基本設定／訓練／接駁」，沿用原生品牌、元件與外層導覽，按客服卡片規格處理移動、縮放和固定最小／最大尺寸。不要搬入本機預覽側欄，不用 iframe 載入整個本機工作台代替原生整合。
+4. 同一安裝工作使用 preflight、plan、backup_gate、apply、register_or_update、verify、complete／waiting_user 及 CAS expected_version。沿用原 operation_id、相同計劃摘要、來源檢查點和已完成階段。重用真正涵蓋相同 scope、schema、checkpoint、可讀私人副本及還原驗證的備份收據。D1 備份不能冒充外部 SQLite 備份。共用 journal 是宿主協調器接入的工具，不是已自動部署的宿主流程。
 
-   宿主現有 Agent 合約使用 connected_client 及 standard 共用控制項，manifest 不能注入任意 HTML、JavaScript 或 iframe。若該版本無法直接呈現客服三個分頁，須在宿主原生元件實作並驗證所需擴充，不能只登記 manifest 就聲稱卡片配置已完成。
+5. 私人安裝記錄及商戶資料保留在程式倉庫之外。現有修改、登入、權限、空白欄位、批准／撤銷、人工接手、未完成工作及歷史草稿不得重設。遷移前停止及驗證備份；失敗依原始資料還原，不靜默打開發送或自動回覆。
 
-5. 客服後台獨立運行，沿用受支援 Node.js 24.22+（24.x）、單程序 SQLite 及倉庫外私人持久資料。Site 不能把 localhost 當作雲端後台，也不能原封不動執行這個 Node／SQLite 服務；先核對 Workers、原生後台或既有主機路線，再完成所需適配。不要直接覆蓋已有 D1／R2 後台。新付費資源先說明費用並取得授權，已有合適資源則沿用。
+6. 使用正式宿主接口找原 Agent ID。可登記時用版本化 manifest、固定來源及受限身份，保存後讀回同 ID。已存在且相符時重用；此 preview 不提供通用宿主 manifest 原地升級接口，不能另加第二張卡片避開不相容。只有登記或設定改動且宿主來源不變時，不重新部署 Site。
 
-   本版每個客服實例只服務一個商戶；工作室有多間公司時，須把實例和受限服務身份固定到指定公司，不能用同一份 SQLite 或未驗證的多租戶方案共用客戶資料。
+7. Sites 原生三分頁 renderer 及完整 D1／R2 客服管理 API 尚未公開實作。套件內的 Sites renderer-contract 是需求合約，不是部署好的相容層。未支援時先說明缺少能力及獨立開發範圍；不用完整 iframe、localhost 或公開原生 Python 接口冒充 Sites 後台。維持同一實際儲存及身份，不套用新站 gateway 覆蓋已有資料。
 
-6. 實作明確的插件 API 命名空間、登入／公司範圍、受限制的服務憑證與版本檢查，不覆蓋宿主整個 /api，不把管理員 token 放前端，不共用宿主 SQLite。資料同步按已核對合約補齊來源撤銷、去重、重試與斷線恢復；宿主已批准資料才供客服採用。公司資料、Site 身份、接續記錄、密碼、金鑰和備份留在私人設定或平台秘密入口，不寫入公開倉庫或聊天。
+8. Node 客服執行器使用受支援 Node 24.22+（24.x）、單程序及一商戶一私人資料目錄。/workbench.html 和 /console 共用同一核心；3101 是隔離預覽。WhatsApp 採固定 Evolution instance、認證 webhook、持久去重、人工核對、發送開關及回執。客人網頁使用受限會話接口，不取得 owner 工具。只有用戶選擇真實接駁時，才設定安全入口及由本人手機掃碼；背景模型另需可用模型設定，不能假設目前 Codex 對話會持續執行。
 
-7. 完成測試後，把必要程式變更提交、審查並合併到我選定的工作室來源。Sites 按目前官方技能更新原有 Site，保留精確 project_id、網址、資料與權限；先推送真正的 Site 來源，再保存匹配版本及發佈。GitHub 與 Site 來源不同時，分別記錄兩邊 commit 和部署版本。只有資料登記而無程式改動時，使用原接口保存並驗證，不製造空提交或重建網站。發佈前後按實際結果核對，不把推送 GitHub 當作網站已更新。
+9. 執行 npm test、npm run check 和宿主必要檢查，驗證當前工具／UI 同 ID 保存讀回、重啟、手機、200% 縮放及原生尺寸。合成資料清楚標示；測試記憶驗收後撤銷，不把歷史測試當作當前證據。原生最後送出仍由本人操作。新渠道須用指定測試入口核對客人實際收到；accepted 不當 delivered，結果不明先核對，不能盲目重發。
 
-8. 執行客服 npm test、npm run check 及宿主必要檢查；在真正工作室驗證登入、客服卡片、三個分頁、保存／重新讀回、訓練批准、未儲存輸入、320px 手機、200% 縮放及卡片尺寸。用一項明確標示且沒有真實客戶資料的任務，完成目前 Codex／DOT 的讀取與草稿回存；原生交接最後需要我本人送出時，給我該一步並如實列為待驗證。重啟客服後再核對同一資料仍在。
+10. 按授權範圍更新 GitHub 及真正受影響的原有 Site。GitHub 與 Site 的來源、提交、儲存及發佈版本分別核對；只有推送程式就如實列為程式已發佈。交付完成、requires_setup、unsupported、not_verified 及 waiting_user 的具體項目，私人接續記錄放倉庫之外，不公開部署身份、憑證、聊天或備份。
 
-9. 完成後交付工作室實際網址、GitHub 提交或無需修改的原因、Site 發佈版本、客服後台狀態、持久化與 Agent 任務讀回證據，以及未完成部分。把不含秘密的安裝進度保存到程式倉庫以外私人位置；換對話或重跑先核對並接續，不重複建站、加卡片或註冊服務。
-
-有工具就完成已授權的實作、測試及發佈，不只回覆計劃。只問尚未取得而且必要的資料；如欠登入、權限、主機或平台能力，先完成其餘獨立工作，再清楚交代下一個所需動作。維持既有資料與已驗證功能；只完成介面、登記或部署其中一部分時，按實際狀態回報。
-
-Codex／DOT 協作不要求另一個模型 API 金鑰；工作室與客服服務之間仍需身份驗證。這次安裝先提供配置、訓練和草稿協作，保持真實 WhatsApp 發送關閉。手機掃碼、供應商帳戶、背景自動回覆與對客發送由我另行指定，不能因卡片已安裝就宣稱客服已自動上線。
+只問尚未取得而必要的資料。有工具時完成已授權的實作及驗證；無需因例行測試、唯讀檢查或已授權的可逆修改再要求確認。新增費用、未知目標、必要帳戶登入或本人操作時，先把可獨立完成的部分做好，再指出精確下一步。

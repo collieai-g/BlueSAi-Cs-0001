@@ -44,3 +44,7 @@ Windows 執行 `tools/start-local-workbench.ps1`，或在 Node.js 24.22+ 執行 
 AI 接口參照 [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)。Evolution 路由及回傳結構參照固定版本的 [instance router](https://github.com/evolution-foundation/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/routes/instance.router.ts) 與 [instance controller](https://github.com/evolution-foundation/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/controllers/instance.controller.ts)。
 
 執行 `npm test` 與 `npm run check`。測試覆蓋待確認知識隔離、修改後撤回批准、跨重啟持久化、對話不進發送佇列、認證與同源限制、模型連線成功／失敗、金鑰不回傳、WhatsApp QR／狀態回應及 HTTPS／redirect 限制。
+
+## 0.3 按鍵接駁教學
+
+同一張卡片的「接駁」新增「接駁 WhatsApp」「接駁網頁」四步教學。3101 仍為隔離預覽；真正執行器的同款配置入口在 `npm start` 的 `/workbench.html`，與 `/console` 共用設定及對話。詳見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)。

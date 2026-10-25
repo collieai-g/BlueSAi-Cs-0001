@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "requires_host_implementation",
+  "renderer": "bluesai-management/1",
+  "api": "bluesai-management-api/1",
+  "tabs": ["basic", "training", "connections"],
+  "identity": "host authenticated company and registered instance; never browser supplied tenant_id",
+  "layout": "one native host card, preserve unsaved inputs on tab changes",
+  "security": ["host owns renderer and authorization", "no remote HTML, script or iframe", "server-only restricted service credentials", "CAS on settings, knowledge and tasks", "approved unexpired knowledge only"],
+  "data_scope": "one instance per company; external SQLite requires its own backup coverage",
+  "required_verification": ["permission revocation", "save and same-ID readback", "320 CSS px", "desktop browser 200% zoom", "card dimensions from docs/BLUEPRINT_PLUGIN_DESIGN.md", "restart persistence"]
+}

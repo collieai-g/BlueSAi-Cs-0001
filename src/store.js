@@ -48,7 +48,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
       const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
-      if (latest > 2) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest > 4) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
       if (latest < 1) {
         this.db.exec(`
           CREATE TABLE response_windows (
@@ -80,6 +80,29 @@ export class Store {
           CREATE INDEX dot_tasks_newest ON dot_tasks(created_at DESC);
         `);
         this.run('INSERT INTO schema_migrations VALUES (?,?)', 2, Date.now());
+      }
+      if (latest < 3) {
+        this.db.exec(`
+          ALTER TABLE messages ADD COLUMN provider_instance TEXT;
+          CREATE TABLE provider_receipts (
+            instance TEXT NOT NULL, provider_id TEXT NOT NULL, address TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('accepted','delivered','read','failed')),
+            received_at INTEGER NOT NULL,
+            PRIMARY KEY(instance,provider_id,address,status));
+          CREATE TABLE channel_activity (
+            instance TEXT PRIMARY KEY, last_incoming_at INTEGER, last_receipt_at INTEGER);
+        `);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 3, Date.now());
+      }
+      if (latest < 4) {
+        this.db.exec(`
+          CREATE TABLE web_chat_sessions (
+            token_hash TEXT PRIMARY KEY, address TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+            rate_window INTEGER NOT NULL, message_count INTEGER NOT NULL DEFAULT 0);
+          CREATE INDEX web_chat_sessions_expiry ON web_chat_sessions(expires_at);
+        `);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 4, Date.now());
       }
     });
   }
@@ -118,9 +141,9 @@ export class Store {
   addMessage(conversationId, role, content, options = {}) {
     const c = this.conversation(conversationId);
     const id = randomUUID();
-    this.run(`INSERT INTO messages(id,conversation_id,role,content,status,provider_id,version,config_version,sources,decision,engine,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, c.id, role, content, options.status || 'received', options.providerId || null,
-      c.version, this.value('revision'), JSON.stringify(options.sources || []), options.decision || null, options.engine || null, Date.now());
+    this.run(`INSERT INTO messages(id,conversation_id,role,content,status,provider_id,version,config_version,sources,decision,engine,created_at,provider_instance)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, c.id, role, content, options.status || 'received', options.providerId || null,
+      c.version, this.value('revision'), JSON.stringify(options.sources || []), options.decision || null, options.engine || null, Date.now(), options.providerInstance || null);
     this.run('UPDATE conversations SET updated_at=? WHERE id=?', Date.now(), c.id);
     return id;
   }

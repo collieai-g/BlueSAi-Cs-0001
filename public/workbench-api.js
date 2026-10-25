@@ -22,6 +22,8 @@
     clearAI:()=>api('/api/workbench/connections/model','DELETE'),
     whatsapp:input=>api('/api/workbench/connections/whatsapp','POST',input),
     checkWhatsApp:()=>api('/api/workbench/connections/whatsapp-check','POST',{}),
+    registerWebhook:()=>api('/api/workbench/connections/whatsapp-webhook','POST',{}),
+    checkWebhook:()=>api('/api/workbench/connections/whatsapp-webhook-check','POST',{}),
     clearWhatsApp:()=>api('/api/workbench/connections/whatsapp','DELETE'),
     dotTasks:()=>api('/api/workbench/dot/tasks'),
     dotTask:id=>api('/api/workbench/dot/tasks/'+encodeURIComponent(id)),

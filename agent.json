@@ -1,7 +1,7 @@
 {
   "name": "BlueSAI-客服",
   "id": "BlueSAi-Cs-#0001",
-  "version": "0.2.0",
+  "version": "0.3.0-preview.1",
   "repository": "https://github.com/collieai-g/BlueSAi-Cs-0001",
   "license": "MIT",
   "productRole": "Blueprint Studio built-in customer-service AI plugin",

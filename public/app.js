@@ -75,7 +75,7 @@ function renderOverview() {
   if(!recent.length) { list.append(el('p','這裡準備好，等你的第一段對話。','empty-copy'),el('p','先教客服、加入資料，再用試聊核對回覆。','help'),button('開始試聊',()=>{page('teach');$('#demo-text').focus();})); }
   for(const c of recent) {
     const b=button('',async()=>{selectedId=c.id;detailSignature='';$('#conversation-filter').value='all';$('#conversation-search').value='';page('inbox',{focus:true});renderContacts();await renderDetail();},'contact recent-contact');
-    b.append(el('strong',c.name),el('p',(c.channel==='demo'?'試聊 · ':'WhatsApp · ')+states[c.state]),el('p',(c.preview||'').slice(0,70)));list.append(b);
+    b.append(el('strong',c.name),el('p',(c.channel==='demo'?'試聊 · ':c.channel==='web'?'網頁聊天 · ':'WhatsApp · ')+states[c.state]),el('p',(c.preview||'').slice(0,70)));list.append(b);
   }
 }
 function fillForms() {
@@ -119,7 +119,7 @@ function renderContacts() {
   if(!conversations.length)list.append(el('p','暫時沒有對話。','empty'));
   for(const c of conversations) {
     const b = button('',async()=>{selectedId=c.id;detailSignature='';await renderDetail();renderContacts();},'contact'+(c.id===selectedId?' selected':''));
-    b.append(el('strong',c.name),el('p',(c.channel==='demo'?'試聊 · ':'WhatsApp · ')+states[c.state]+(c.pending?' · 有待辦':'')),el('p',(c.preview||'').slice(0,60)));list.append(b);
+    b.append(el('strong',c.name),el('p',(c.channel==='demo'?'試聊 · ':c.channel==='web'?'網頁聊天 · ':'WhatsApp · ')+states[c.state]+(c.pending?' · 有待辦':'')),el('p',(c.preview||'').slice(0,60)));list.append(b);
   }
 }
 function messageNode(m, editable=false, conversation) {

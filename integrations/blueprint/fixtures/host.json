@@ -1,0 +1,12 @@
+{
+  "fixture": true,
+  "source": {"repository":"https://github.com/collieai-g/Blueprint-Studio-Open-Source","revision":"1157aa49538b402e7a54996068e845c44abecb8f"},
+  "platform": "native",
+  "agent_contract": 1,
+  "renderers": ["standard"],
+  "apis": ["blueprint-agent/1"],
+  "role": "owner",
+  "target_id": "synthetic-company",
+  "runtime": {"kind":"external-node","node_version":"24.22.0","persistent_storage":true,"public_https":false,"provider_configured":false,"webhook_configured":false,"delivery_enabled":false,"model_configured":false},
+  "required_data": [{"domain":"synthetic-sqlite","schema":2,"checkpoint":"fixture-before-upgrade","coverage":["database","credentials","pending_jobs","merchant_settings"]}]
+}
