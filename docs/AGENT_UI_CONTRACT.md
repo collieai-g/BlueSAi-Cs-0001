@@ -1,6 +1,6 @@
 # 客服 Agent 卡片與宿主資料邊界
 
-版本：0.3.0-preview.2。這是客服介面、安裝和後續更新的固定合約。
+版本：0.4.0-preview.1。這是客服介面、安裝和後續更新的固定合約。
 
 ## 一個 Agent 項目、一張卡片
 
@@ -45,8 +45,8 @@
 
 ## 卡片資產與本機頁面分開
 
-`tools/build-workbench.py` 從同一份設計產生兩類資產。`public/agent-card.html` 只有客服根節點的元件標記，沒有文件外殼、登入頁或 script；`public/agent-card.css` 只有 `#cs-card-design` 內的樣式，不含 `body` 或 `.local-login` 規則。客服腳本沿用 `workbench-api.js`、`agent-handoff.js`、`workbench.js`，不複製另一份腳本。
+`tools/build-workbench.py` 從同一份設計產生兩類資產。`public/agent-card.html` 只有客服根節點的元件標記，沒有文件外殼、登入頁或 script；`public/agent-card.css` 只有 `#cs-card-design` 內的樣式，不含 `body` 或 `.local-login` 規則。客服腳本沿用 `workbench-api.js`、`agent-handoff.js`、`inbox-tools.js`、`workbench.js`，不複製另一份腳本。
 
-`integrations/blueprint/card-ui.json` 列出這五個經審閱的來源資產，以及必要的 `bluesai-management/1` renderer、`bluesai-management-api/1` 和客服專屬 API 命名空間。這是資產邊界，狀態仍為 `requires_setup`；宿主須實作及審閱原生 renderer，不能直接注入 HTML／script 或用 iframe 代替。
+`integrations/blueprint/card-ui.json` 列出這六個經審閱的來源資產，以及必要的 `bluesai-management/1` renderer、`bluesai-management-api/1` 和客服專屬 API 命名空間。這是資產邊界，狀態仍為 `requires_setup`；宿主須實作及審閱原生 renderer，不能直接注入 HTML／script 或用 iframe 代替。
 
 `public/workbench.html`、`public/workbench.css` 只供獨立本機卡片頁使用；`public/index.html`、`public/app.js`、`public/style.css` 是診斷整頁資產。以上全部禁止加入宿主卡片介面 bundle。不能以複製整個 `public/` 或全域 CSS 的方式安裝客服卡片。

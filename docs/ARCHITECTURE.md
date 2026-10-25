@@ -1,6 +1,6 @@
 # 客服卡片與執行器架構
 
-版本：0.3.0-preview.2。權威介面及資料邊界見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
+版本：0.4.0-preview.1。權威介面及資料邊界見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
 
 ## 宿主中的一個 Agent
 
@@ -41,11 +41,11 @@ Blueprint Studio 提供外層工作空間、身份、導覽、主題及排版。
 - 未完成動作不得由模型聲稱已退款、預約、通知或改單。模型沒有這些執行工具。
 - 發送前重查人工狀態、來源、版本、發送開關、測試範圍及窗口。在途訊息不能保證撤回；不明結果不自動重發。
 
-schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／DOT 任務，v3 保存 provider instance、回執 inbox 及觀察，v4 保存受限網頁會話。遷移前正常停止、備份及驗證還原；不重建商戶資料或默默啟用發送。
+schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／DOT 任務，v3 保存 provider instance、回執 inbox 及觀察，v4 保存受限網頁會話，v5 新增 FAQ 對照及知識庫優先政策。遷移前正常停止、備份及驗證還原；不重建商戶資料或默默啟用發送。
 
 ## 真實渠道與驗收範圍
 
-本機連結裝置橋接與客服可同機 loopback 運行，不需要把本機管理頁公開。第三方 Baileys 路線不是 Meta Cloud API；登入資料只在私人渠道目錄，指定測試 allowlist 同時限制來訊轉送及發送。空名單只允許 QR／連線狀態，不把其他客戶訊息送進客服或模型。
+本機連結裝置橋接與客服可同機 loopback 運行，不需要把本機管理頁公開。第三方 Baileys 路線不是 Meta Cloud API；登入資料只在私人渠道目錄。原有指定號碼測試模式預設空名單；本人另可明確選擇所有新私人文字收件。接收權限與只回覆實際最近來訊客戶的發送授權分開，不能由開收件變成任意號碼廣播。詳見 [即時對話邏輯](LIVE_INBOX.md)。
 
 Evolution 可作為獨立供應商；遠端服務須核對真正 callback 的 HTTPS 可達性與身份。兩種方式都不把手機 open 當作客服已收件。實際設定見 [WHATSAPP_RUNTIME.md](WHATSAPP_RUNTIME.md)。
 

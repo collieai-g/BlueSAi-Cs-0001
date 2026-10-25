@@ -12,13 +12,14 @@
   "assets": {
     "markup": "public/agent-card.html",
     "stylesheet": "public/agent-card.css",
-    "scripts_in_order": ["public/workbench-api.js", "public/agent-handoff.js", "public/workbench.js"]
+    "scripts_in_order": ["public/workbench-api.js", "public/agent-handoff.js", "public/inbox-tools.js", "public/workbench.js"]
   },
   "asset_allowlist": [
     "public/agent-card.html",
     "public/agent-card.css",
     "public/workbench-api.js",
     "public/agent-handoff.js",
+    "public/inbox-tools.js",
     "public/workbench.js"
   ],
   "forbidden_host_bundle_assets": [

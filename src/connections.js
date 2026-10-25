@@ -10,6 +10,8 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
   let wa = waSecret ? { status: 'configured', url: waSecret.url, instance: waSecret.instance } : { status: 'unconfigured' };
   let changing = false, webhookRegistered = false, webhookCheckedAt = null;
   let manualTestEnabled = false;
+  let inboxReplyEnabled = false;
+  let inboxScope = { available:localWhatsAppTest, mode:'test',consented:false,replyToReceived:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],replyScope:'recent_incoming_only' };
   let testRecipients = { count: 0, maskedNumbers: [], deliveryEnabled: false, activationAvailable: false };
   if (localWhatsAppTest) {
     const target = waSecret && new URL(waSecret.url);
@@ -81,6 +83,17 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       store.revise();
     }
   }
+  async function refreshInboxScope() {
+    if(!localWhatsAppTest)return {...inboxScope};
+    const data=await request(instancePath('inboxScope'));
+    if(!['test','all_private_text'].includes(data.mode)||typeof data.consented!=='boolean'||typeof data.replyToReceived!=='boolean')throw new ServiceError('收件範圍未能讀回核對，請更新本機接駁服務。',502);
+    inboxScope={...inboxScope,mode:data.mode,consented:data.consented,replyToReceived:data.replyToReceived};
+    if(inboxReplyEnabled && (data.mode!=='all_private_text'||!data.consented||!data.replyToReceived)){
+      inboxReplyEnabled=false;
+      engine.evolution=createEvolution({...providerConfig,deliveryEnabled:manualTestEnabled,fetchImpl});store.revise();
+    }
+    return {...inboxScope};
+  }
   async function checkWebhook() {
     if (!webhookConfigured()) throw new ServiceError('請先設定 PUBLIC_BASE_URL、WEBHOOK_SECRET 及 Evolution 伺服器秘密，然後重啟。', 409);
     webhookRegistered = false;
@@ -98,12 +111,12 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     status: () => {
       const activity = waSecret ? store.get('SELECT * FROM channel_activity WHERE instance=?', waSecret.instance) : null;
       const profile = store.value('profile'), settings = store.value('settings');
-      const missingFields = [!profile.name && '商戶名稱', !profile.service && '服務說明', !settings.handoffContact && '人工接手方式'].filter(Boolean);
+      const missingFields = engine.inboxPolicy().enabled ? [] : [!profile.name && '商戶名稱', !profile.service && '服務說明', !settings.handoffContact && '人工接手方式'].filter(Boolean);
       return { mode: runtime ? 'runtime' : 'preview', runtimeName: runtime ? '客服收發執行器' : '隔離本機預覽', publicBaseUrl: callbackUrl ? new URL(callbackUrl).origin : '', ai: { ...ai }, whatsapp: {
         ...wa, receiveEnabled: Boolean(runtime && engine.evolution.configured && webhookSecret), deliveryEnabled: Boolean(runtime && engine.evolution.deliveryEnabled),
         webhook: { configured: webhookConfigured(), registered: webhookRegistered, verifiedAt: webhookCheckedAt },
         evidence: { lastIncomingAt: activity?.last_incoming_at || null, lastReceiptAt: activity?.last_receipt_at || null },
-        localTest: localWhatsAppTest, manualTestEnabled, testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled) },
+        localTest: localWhatsAppTest, manualTestEnabled, inboxReplyEnabled,inboxScope:{...inboxScope},testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled || inboxReplyEnabled) },
       } };
     },
     model: input => exclusive(async () => {
@@ -121,7 +134,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
         if ((input.url && input.url.replace(/\/$/, '') !== providerConfig.url.replace(/\/$/, '')) ||
             (input.instance && input.instance !== providerConfig.instance) || (input.apiKey && input.apiKey !== providerConfig.apiKey)) throw new ServiceError('收發執行器使用伺服器固定的渠道設定；更改渠道請更新伺服器秘密並重啟。', 409);
         waSecret = { url: providerConfig.url.replace(/\/$/, ''), instance: providerConfig.instance, apiKey: providerConfig.apiKey };
-        engine.evolution = createEvolution({ ...providerConfig, deliveryEnabled: localWhatsAppTest ? manualTestEnabled : providerConfig.deliveryEnabled, fetchImpl });
+        engine.evolution = createEvolution({ ...providerConfig, deliveryEnabled: localWhatsAppTest ? (manualTestEnabled || inboxReplyEnabled) : providerConfig.deliveryEnabled, fetchImpl });
       } else {
         const url = text(input.url, 500).replace(/\/$/, ''), instance = text(input.instance, 100);
         const apiKey = typeof input.apiKey === 'string' && input.apiKey.trim() ? text(input.apiKey, 500) : waSecret?.url === url && waSecret?.instance === instance ? waSecret.apiKey : '';
@@ -152,11 +165,29 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       return checkWebhook();
     }),
     checkWebhook: () => exclusive(checkWebhook),
+    getInboxScope:()=>exclusive(refreshInboxScope),
+    configureInboxScope:input=>exclusive(async()=>{
+      if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本機即時收件範圍設定。',409);
+      manualTestEnabled=false;inboxReplyEnabled=false;
+      engine.evolution=createEvolution({...providerConfig,deliveryEnabled:false,fetchImpl});store.revise();
+      if(!input||!['test','all_private_text'].includes(input.mode)||input.consent!==true||typeof input.replyToReceived!=='boolean'||(input.mode==='test'&&input.replyToReceived))throw new ServiceError('請確認收件範圍及是否允許回覆最近來訊客戶。');
+      if((await request(instancePath('connectionState'))).instance?.state!=='open')throw new ServiceError('請先核對 WhatsApp 手機連線。',409);
+      wa.status='open';wa.checkedAt=Date.now();
+      if(!(await checkWebhook()).registered)throw new ServiceError('請先設定並核對收件網址。',409);
+      await request(instancePath('inboxScope'),{method:'PUT',data:{mode:input.mode,consent:true,replyToReceived:input.replyToReceived}});
+      const result=await refreshInboxScope();
+      if(result.mode!==input.mode||!result.consented||result.replyToReceived!==input.replyToReceived)throw new ServiceError('收件及回覆範圍讀回不相符，尚未開啟客服發送。',502);
+      const provider=createEvolution({...providerConfig,deliveryEnabled:input.replyToReceived,fetchImpl});
+      store.transaction(()=>{store.revise();store.audit('whatsapp_inbox_scope_updated',input.mode);});
+      engine.evolution=provider;inboxReplyEnabled=input.replyToReceived;
+      return {...result,message:input.replyToReceived?'已接收新私人文字來訊，並允許回覆最近 24 小時實際傳訊過來的客戶。知識庫自動回覆仍依卡片開關及已確認答案。':'收件範圍已更新；發送保持關閉。'};
+    }),
     configureTestRecipient: input => exclusive(async () => {
       if (!localWhatsAppTest || !runtime || !waSecret) throw new ServiceError('這個接駁服務未提供受限本機 WhatsApp 測試。',409);
       // Reconfiguration first closes the sender, including failed readiness
       // checks and unknown provider writes from a previously active session.
       manualTestEnabled = false;
+      inboxReplyEnabled = false;
       engine.evolution = createEvolution({ ...providerConfig, deliveryEnabled:false, fetchImpl });
       store.revise();
       if (input?.consent !== true || typeof input.number !== 'string') throw new ServiceError('請填寫測試號碼並確認已獲同意。');
@@ -168,7 +199,9 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       if (!(await checkWebhook()).registered) throw new ServiceError('請先設定並核對收件網址。',409);
       await request(instancePath('testRecipients'),{method:'PUT',data:{numbers:[number],activateSending:true,consent:true}});
       await refreshTestRecipients();
+      await refreshInboxScope();
       if (!testRecipients.deliveryEnabled || testRecipients.count !== 1 || !testRecipients.maskedNumbers[0].endsWith(number.slice(-4))) throw new ServiceError('測試號碼或發送開關未能讀回核對，尚未啟用客服發送。',502);
+      if(inboxScope.mode!=='test'||inboxScope.replyToReceived)throw new ServiceError('指定號碼模式未能讀回核對，尚未啟用發送。',502);
       const approvedProvider = createEvolution({ ...providerConfig, deliveryEnabled:true, fetchImpl });
       store.transaction(()=>{store.set('settings',{...store.value('settings'),mode:'review'});store.revise();store.audit('whatsapp_manual_test_enabled',waSecret.instance);});
       engine.evolution = approvedProvider;
@@ -178,8 +211,10 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     clearWhatsApp: () => exclusive(async () => {
       // Close the core sender before waiting on a slow or unavailable bridge.
       manualTestEnabled = false;
+      inboxReplyEnabled = false;
       if (runtime) { engine.evolution = createEvolution(); store.revise(); }
       if (localWhatsAppTest && waSecret) {
+        try { await request(instancePath('inboxScope'),{method:'PUT',data:{mode:'test',replyToReceived:false,consent:true}}); } catch {}
         try { await request(instancePath('testRecipients'),{method:'PUT',data:{numbers:[],activateSending:false,consent:true}}); } catch {}
       }
       manualTestEnabled = false; testRecipients = { count:0,maskedNumbers:[],deliveryEnabled:false,activationAvailable:localWhatsAppTest };

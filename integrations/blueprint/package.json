@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bluesai-cs-0001",
   "display_identity": "BlueSAi-Cs-#0001",
-  "version": "0.3.0-preview.2",
+  "version": "0.4.0-preview.1",
   "channel": "preview",
   "license": "MIT",
   "repository": "https://github.com/collieai-g/BlueSAi-Cs-0001",
@@ -13,11 +13,11 @@
     "reference_repository": "https://github.com/collieai-g/Blueprint-Studio-Open-Source",
     "integration": "1.0"
   },
-  "storage": {"scope": "one merchant per process and private data directory", "runtime": "node-sqlite", "schema_minimum": 2, "schema_current": 4, "upgrade_migrations": [3, 4]},
+  "storage": {"scope": "one merchant per process and private data directory", "runtime": "node-sqlite", "schema_minimum": 2, "schema_current": 5, "upgrade_migrations": [3, 4, 5]},
   "modes": {
     "collaboration": {"status": "supported", "execution": "current connected client; explicit user request", "renderer": "standard", "evidence": "test/install.test.js; test/dot-tasks.test.js"},
     "web-chat": {"status": "requires_setup", "execution": "independent Node service; explicit WEB_CHAT_ENABLED; restricted guest sessions", "evidence": "test/web-chat.test.js", "live_receipt": "not_verified"},
-    "whatsapp": {"status": "requires_setup", "execution": "independent Node 24.22+ service and a real linked-device channel; user QR scan and selected test recipient", "evidence": "test/service.test.js; test/whatsapp-runtime.test.js", "live_receipt": "not_verified"}
+    "whatsapp": {"status": "requires_setup", "execution": "independent Node 24.22+ service and a real linked-device channel; user QR scan; explicit receive scope and reply authorization", "evidence": "test/service.test.js; test/whatsapp-runtime.test.js; test/whatsapp-inbox-scope.test.js", "live_receipt": "not_verified"}
   },
   "capabilities": {
     "native_management_tabs": {"status": "requires_setup", "renderer": "bluesai-management/1", "api": "bluesai-management-api/1", "evidence": "integrations/blueprint/sites/renderer-contract.json", "live_host": "not_verified"},

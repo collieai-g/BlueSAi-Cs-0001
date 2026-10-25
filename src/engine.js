@@ -4,6 +4,11 @@ export class ServiceError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 
+// Full-question matching deliberately does not invent semantic similarity or
+// remove interior punctuation (for example, decimal points and product codes).
+export const normalizeFaqQuestion = text => typeof text === 'string'
+  ? text.normalize('NFKC').trim().replace(/\s+/gu, ' ').replace(/[?？!！。]+$/gu, '').trim().toLowerCase() : '';
+
 export class Engine {
   constructor(store, agent, evolution, { now = Date.now, responseTimeoutMs = 30000, deadlinePollMs = 250 } = {}) {
     if (typeof now !== 'function' || !Number.isSafeInteger(responseTimeoutMs) || responseTimeoutMs < 1 || responseTimeoutMs > 86400000 ||
@@ -19,6 +24,82 @@ export class Engine {
     const c = this.store.conversation(id);
     if (!c) throw new ServiceError('找不到對話。', 404);
     return c;
+  }
+  inboxPolicy() { return this.store.value('inbox_policy'); }
+  inboxStatus() {
+    const pending = this.store.all(`SELECT h.id,h.conversation_id,h.reason,h.created_at FROM handoff_tasks h
+      JOIN conversations c ON c.id=h.conversation_id
+      WHERE h.status='pending' AND c.state IN ('waiting','human')
+      AND h.rowid=(SELECT MAX(h2.rowid) FROM handoff_tasks h2 WHERE h2.conversation_id=h.conversation_id AND h2.status='pending')
+      ORDER BY h.created_at DESC LIMIT 200`).map(row=>({id:row.id,conversationId:row.conversation_id,reason:row.reason,createdAt:row.created_at}));
+    const pendingCount = this.store.get(`SELECT COUNT(DISTINCT h.conversation_id) AS n FROM handoff_tasks h
+      JOIN conversations c ON c.id=h.conversation_id WHERE h.status='pending' AND c.state IN ('waiting','human')`).n;
+    return { policy: this.inboxPolicy(), pendingCount, pending, hasMore: pendingCount > pending.length,
+      notification: { scope: 'local_card', externalNotified: false } };
+  }
+  configureInbox(input) {
+    if (!input || typeof input.enabled !== 'boolean' || typeof input.automaticKnowledge !== 'boolean') throw new ServiceError('請確認收件箱及知識庫自動回覆設定。');
+    return this.store.transaction(()=>{
+      const previous = this.inboxPolicy();
+      const next = { enabled: input.enabled, automaticKnowledge: input.automaticKnowledge };
+      if (JSON.stringify(previous) === JSON.stringify(next)) return this.inboxStatus();
+      const unanswered = next.enabled ? this.store.all(`SELECT DISTINCT c.id FROM conversations c
+        WHERE c.state='ai' AND (EXISTS(SELECT 1 FROM jobs j WHERE j.conversation_id=c.id AND j.state IN ('pending','running'))
+          OR EXISTS(SELECT 1 FROM response_windows w WHERE w.conversation_id=c.id AND w.status='pending'))`) : [];
+      this.store.set('inbox_policy', next); this.store.revise();
+      if (next.enabled) {
+        this.store.run("UPDATE jobs SET state='done' WHERE state IN ('pending','running')");
+        for (const row of unanswered) {
+          this.closeWindow(row.id, 'cancelled', 'knowledge_mode_enabled');
+          const message = this.store.get("SELECT * FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1", row.id);
+          if (message) this.answerFromKnowledge(this.store.conversation(row.id), message);
+        }
+      }
+      this.store.audit('inbox_policy_changed');
+      return this.inboxStatus();
+    });
+  }
+  addFaq(input) {
+    const question = typeof input?.question === 'string' ? input.question.trim() : '';
+    const answer = typeof input?.answer === 'string' ? input.answer.trim() : '';
+    const normalized = normalizeFaqQuestion(question);
+    if (!question || question.length > 500 || !normalized || !answer || answer.length > 2000 || typeof input.approved !== 'boolean') throw new ServiceError('請填寫完整問題、答案及是否確認採用。');
+    return this.store.transaction(()=>{
+      if (this.store.get('SELECT count(*) AS n FROM knowledge').n >= 100 || this.store.get('SELECT count(*) AS n FROM faq_rules').n >= 100) throw new ServiceError('已達 100 條資料，請先整理舊記憶。');
+      const id = randomUUID(), knowledgeId = randomUUID(), now = Date.now();
+      const category = /退款|退貨|refund/iu.test(question) ? 'refund' : 'general';
+      this.store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)', knowledgeId, question.slice(0,100), category, answer, input.approved ? 1 : 0, null, now);
+      this.store.run('INSERT INTO faq_rules VALUES (?,?,?,?,?)', id, knowledgeId, question, normalized, now);
+      this.store.revise(); this.store.audit(input.approved ? 'faq_approved' : 'faq_proposed', id);
+      return { id, knowledgeId, question, answer, approved: input.approved };
+    });
+  }
+  listFaq() {
+    return this.store.all(`SELECT r.id,r.knowledge_id,r.question,k.content,k.approved,k.expires_at FROM faq_rules r
+      JOIN knowledge k ON k.id=r.knowledge_id ORDER BY r.created_at DESC,r.rowid DESC`).map(row=>({
+      id:row.id,knowledgeId:row.knowledge_id,question:row.question,answer:row.content,approved:Boolean(row.approved),expiresAt:row.expires_at,
+      usable:Boolean(row.approved && (row.expires_at == null || row.expires_at > Date.now())) }));
+  }
+  answerFromKnowledge(c, message, forcedReason = '') {
+    if (!c || c.state !== 'ai') return;
+    if (this.store.get("SELECT id FROM messages WHERE conversation_id=? AND version=? AND engine='knowledge' AND status<>'cancelled'", c.id, c.version)) return;
+    const matches = this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
+      WHERE r.normalized_question=? AND k.approved=1 AND (k.expires_at IS NULL OR k.expires_at>?)`, normalizeFaqQuestion(message.content), this.now());
+    let reason = forcedReason;
+    if (!reason && (/退款|退貨|refund|例外|exception/iu.test(message.content) || matches.some(row=>row.category==='refund'))) reason = 'knowledge_requires_human';
+    if (!reason && matches.length !== 1) reason = matches.length ? 'knowledge_conflict' : 'knowledge_missing';
+    if (reason) {
+      this.openWindow(c.id, message.id, this.now());
+      const window = this.pendingWindow(c.id);
+      if (window) this.handoffWindow(window, reason);
+      return;
+    }
+    const automatic = this.inboxPolicy().automaticKnowledge &&
+      (c.channel === 'demo' || (c.channel === 'web' ? this.webChatEnabled : this.liveReady()));
+    this.store.addMessage(c.id, 'assistant', matches[0].content, {
+      status: automatic ? 'queued' : 'draft', sources: [matches[0].id], decision: 'answer', engine: 'knowledge',
+    });
+    this.store.audit(automatic ? 'knowledge_reply_queued' : 'knowledge_reply_drafted', c.id);
   }
   invalidate(id) {
     this.store.run('UPDATE conversations SET version=version+1, updated_at=? WHERE id=?', Date.now(), id);
@@ -70,6 +151,7 @@ export class Engine {
       this.closeWindow(id, 'cancelled', state === 'ai' ? 'resume' : 'manual_takeover');
       this.store.run("UPDATE jobs SET state='done' WHERE conversation_id=? AND state IN ('pending','running')", id);
       this.store.run('UPDATE conversations SET state=? WHERE id=?', state, id);
+      if (state === 'ai') this.store.run("UPDATE handoff_tasks SET status='acknowledged' WHERE conversation_id=? AND status='pending'", id);
       this.store.audit(state === 'ai' ? 'resume' : 'takeover', id);
     });
   }
@@ -91,6 +173,12 @@ export class Engine {
       const id = this.store.addMessage(c.id, 'user', text, { providerId: ['evolution','web'].includes(channel) ? eventId : null, providerInstance: channel === 'evolution' ? this.evolution.instance : null });
       if (channel === 'evolution' && this.evolution.instance) this.store.run(`INSERT INTO channel_activity(instance,last_incoming_at) VALUES (?,?)
         ON CONFLICT(instance) DO UPDATE SET last_incoming_at=excluded.last_incoming_at`, this.evolution.instance, receivedAt);
+      if (this.inboxPolicy().enabled) {
+        const current = this.store.conversation(c.id);
+        const reason = review ? 'incoming_needs_review' : /真人|人工|投訴|human|complaint/iu.test(text) ? 'customer_requests_human' : '';
+        this.answerFromKnowledge(current, this.store.get('SELECT * FROM messages WHERE id=?', id), reason);
+        return { conversationId: c.id, messageId: id, duplicate: false };
+      }
       if (c.state === 'ai') this.openWindow(c.id, id, receivedAt);
       if (review || /真人|人工|投訴|human|complaint/i.test(text)) {
         const window = this.pendingWindow(c.id);
@@ -149,6 +237,14 @@ export class Engine {
     if (!c || c.state !== 'ai' || c.version !== job.version) {
       this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id); return;
     }
+    if (this.inboxPolicy().enabled) {
+      this.store.transaction(()=>{
+        const message = this.store.get('SELECT * FROM messages WHERE id=?', job.id);
+        if (message) this.answerFromKnowledge(c, message);
+        this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id);
+      });
+      return;
+    }
     const revision = this.store.value('revision');
     this.store.run("UPDATE jobs SET state='running' WHERE id=?", job.id);
     try {
@@ -157,7 +253,7 @@ export class Engine {
       this.checkDeadlines();
       this.store.transaction(() => {
         const current = this.store.conversation(c.id);
-        if (current?.state === 'ai' && current.version === c.version && revision === this.store.value('revision')) {
+        if (!this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version && revision === this.store.value('revision')) {
           const settings = this.store.value('settings');
           const canAuto = settings.mode === 'auto' && result.decision === 'answer' &&
             (c.channel === 'demo' || (this.agent.configured && (c.channel === 'web' ? this.webChatEnabled : this.liveReady())));
@@ -174,14 +270,14 @@ export class Engine {
         }
         // A knowledge edit during generation should regenerate, not silently lose
         // a still-current customer request. Takeover/newer input remains final.
-        const next = current?.state === 'ai' && current.version === c.version && revision !== this.store.value('revision') ? 'pending' : 'done';
+        const next = !this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version && revision !== this.store.value('revision') ? 'pending' : 'done';
         this.store.run('UPDATE jobs SET state=? WHERE id=?', next, job.id);
       });
     } catch {
       this.checkDeadlines();
       this.store.transaction(() => {
         const current = this.store.conversation(c.id);
-        const stillCurrent = current?.state === 'ai' && current.version === c.version;
+        const stillCurrent = !this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version;
         this.store.run('UPDATE jobs SET state=? WHERE id=?', stillCurrent ? 'failed' : 'done', job.id);
         if (stillCurrent) {
           const window = this.pendingWindow(c.id);
@@ -193,9 +289,13 @@ export class Engine {
       });
     }
   }
+  channelReady() { return Boolean(this.evolution.configured && this.evolution.deliveryEnabled); }
   liveReady() {
+    // A model-free inbox needs the explicitly enabled channel, not invented
+    // merchant profile fields or a contact used only by the legacy AI workflow.
+    if (this.inboxPolicy().enabled) return this.channelReady();
     const p = this.store.value('profile'); const settings = this.store.value('settings');
-    return Boolean(this.evolution.configured && this.evolution.deliveryEnabled && p.name && p.service && settings.handoffContact);
+    return Boolean(this.channelReady() && p.name && p.service && settings.handoffContact);
   }
   approve(messageId, text) {
     this.checkDeadlines();
@@ -212,7 +312,12 @@ export class Engine {
     const c = this.requireConversation(id);
     if (c.state !== 'human') throw new ServiceError('請先接手對話。', 409);
     if (c.channel === 'evolution' && !this.liveReady()) throw new ServiceError('尚未完成真實發送設定。', 409);
-    return this.store.addMessage(id, 'staff', text, { status: 'queued' });
+    return this.store.transaction(()=>{
+      const messageId = this.store.addMessage(id, 'staff', text, { status: 'queued' });
+      this.store.run("UPDATE handoff_tasks SET status='handled' WHERE conversation_id=? AND status='pending'", id);
+      this.store.audit('manual_reply_queued', id);
+      return messageId;
+    });
   }
   async dispatch(m) {
     this.checkDeadlines();

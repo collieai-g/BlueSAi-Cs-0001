@@ -1,6 +1,6 @@
 {
   "name": "bluesai-cs-0001",
-  "version": "0.3.0-preview.2",
+  "version": "0.4.0-preview.1",
   "private": true,
   "type": "module",
   "description": "為藍圖工作室設計的內置客服 AI 插件：原生卡片介面、對話訓練與 Evolution API 接駁；目前提供獨立本機實測版",

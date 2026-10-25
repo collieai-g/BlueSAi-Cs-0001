@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto';
 export const defaults = {
   profile: { name: '', industry: '', service: '', instructions: '', tone: 'friendly' },
   settings: { mode: 'review', handoffContact: '' },
+  inbox_policy: { enabled: false, automaticKnowledge: false },
   revision: 1,
 };
 
 export class Store {
   constructor(path) {
+    this.listeners = new Set(); this.changeQueued = false; this.closed = false;
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -48,7 +50,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
       const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
-      if (latest > 4) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest > 5) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
       if (latest < 1) {
         this.db.exec(`
           CREATE TABLE response_windows (
@@ -104,9 +106,35 @@ export class Store {
         `);
         this.run('INSERT INTO schema_migrations VALUES (?,?)', 4, Date.now());
       }
+      if (latest < 5) {
+        this.db.exec(`CREATE TABLE faq_rules (
+          id TEXT PRIMARY KEY,
+          knowledge_id TEXT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
+          question TEXT NOT NULL, normalized_question TEXT NOT NULL,
+          created_at INTEGER NOT NULL);
+          CREATE INDEX faq_rules_question ON faq_rules(normalized_question);`);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 5, Date.now());
+      }
     });
   }
-  run(sql, ...args) { return this.db.prepare(sql).run(...args); }
+  run(sql, ...args) {
+    const result = this.db.prepare(sql).run(...args);
+    // A change hint carries no customer data. Run listeners after the synchronous
+    // transaction finishes; even a rollback only asks clients to read fresh state.
+    if (this.listeners.size && !this.changeQueued) {
+      this.changeQueued = true;
+      queueMicrotask(() => {
+        this.changeQueued = false;
+        if (!this.closed) for (const listener of this.listeners) { try { listener(); } catch {} }
+      });
+    }
+    return result;
+  }
+  subscribe(listener) {
+    if (this.closed || typeof listener !== 'function') throw new Error('INVALID_STORE_SUBSCRIPTION');
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
   get(sql, ...args) { return this.db.prepare(sql).get(...args); }
   all(sql, ...args) { return this.db.prepare(sql).all(...args); }
   transaction(fn) {
@@ -152,5 +180,5 @@ export class Store {
     // A crash after dispatch cannot establish whether the provider accepted it.
     this.run("UPDATE messages SET status='uncertain' WHERE status='sending'");
   }
-  close() { this.db.close(); }
+  close() { this.closed = true; this.listeners.clear(); this.db.close(); }
 }
