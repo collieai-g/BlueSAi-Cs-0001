@@ -15,6 +15,7 @@ function fixture(t, overrides={}) {
   const fetchImpl=async(url,options={})=>{
     calls.push({url,method:options.method});
     if(url.includes('/connectionState/'))return Response.json({instance:{state}});
+    if(url.includes('/inboxScope/'))return Response.json({mode:'test',consented:false,replyToReceived:false});
     if(url.includes('/webhook/find/'))return Response.json({webhook:{enabled:registered,url:'http://127.0.0.1:3100/webhooks/evolution',headers:{Authorization:'Bearer '+secret},byEvents:false,base64:false,events:['MESSAGES_UPSERT','MESSAGES_UPDATE']}});
     if(url.includes('/testRecipients/')){
       if(options.method==='PUT'&&selfRecipient)return Response.json({code:'SELF_TEST_RECIPIENT'},{status:409});
@@ -88,6 +89,7 @@ test('failed review-mode transaction cannot leave provider sending enabled',asyn
 test('disconnect closes the core sender before waiting for bridge revocation',async t=>{
   let releaseRevoke, pendingRevoke=false;
   const f=fixture(t,{fetchImpl:async(url,options)=>{
+    if(pendingRevoke)throw new Error('simulated unavailable bridge');
     pendingRevoke=true;
     await new Promise(resolve=>{releaseRevoke=resolve;});
     throw new Error('simulated unavailable bridge');

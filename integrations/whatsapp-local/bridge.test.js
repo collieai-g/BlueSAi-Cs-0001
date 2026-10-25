@@ -17,7 +17,7 @@ async function fixture(t, options={}) {
   let stamp=Date.now(),socket=null,calls=[],callbacks=[];
   const mappingRequests=[];
   const loadAuth=async()=>({state:{creds:{registered:false,me:{id:linkedAddress}},keys:{}},saveCreds:async()=>{}});
-  const bridge=createLocalBridge({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,allowTestActivation:true,
+  const bridge=createLocalBridge({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,allowTestActivation:true,flushIntervalMs:60000,
     makeSocket:config=>{socket={ev:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
     fetchImpl:async(url,init)=>{callbacks.push({url,init});return new Response('{}');},...options});
   await new Promise(resolve=>bridge.server.listen(0,'127.0.0.1',resolve));
@@ -175,4 +175,237 @@ test('linked account identity uses explicit phone creds and never guesses from a
   assert.equal(resolveLinkedPhone({user:{id:'123456789:0@lid'}},{creds:{me:{id:linkedAddress}}}),linkedNumber);
   assert.equal(resolveLinkedPhone({user:{id:'123456789:0@lid'}},{creds:{me:{id:'123456789@lid'}}}),null);
   assert.equal(resolveLinkedPhone({user:{id:address}},{creds:{me:{id:linkedAddress}}}),null);
+});
+
+test('all-private inbox requires owner authentication, explicit consent, open phone and verified webhook',async t=>{
+  const f=await fixture(t),path=`/instance/inboxScope/${instance}`;
+  assert.equal((await f.api(path)).data.mode,'test');
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text',consent:true},'wrong')).status,401);
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text',consent:true})).status,409);
+  await f.connect();
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text',consent:true})).status,409);
+  await f.register();
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text'})).status,409);
+  assert.equal(f.bridge.status().inboxScope.mode,'test');
+  const granted=await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  assert.equal(granted.status,200);assert.equal(granted.data.consented,true);
+  assert.equal(granted.data.sendingScope,'test_allowlist');assert.equal(granted.data.deliveryEnabled,false);
+  assert.deepEqual(granted.data.excluded,['history','groups','broadcasts','self_messages','media']);
+  assert.doesNotMatch(JSON.stringify(granted.data),/synthetic-test|8525555/);
+});
+
+test('all-private inbox receives unlisted fresh direct texts and verified LIDs without widening sending',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[
+    f.message('all-direct'),
+    f.message('all-lid',{key:{id:'all-lid',remoteJid:'123456789:3@lid',fromMe:false}}),
+    f.message('bad-lid',{key:{id:'bad-lid',remoteJid:'999999999@lid',fromMe:false}}),
+    f.message('group',{key:{id:'group',remoteJid:'123456789@g.us',remoteJidAlt:address,fromMe:false}}),
+    f.message('self',{key:{id:'self',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true}}),
+    f.message('own-pn',{key:{id:'own-pn',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:false}}),
+    f.message('media',{message:{imageMessage:{caption:'［合成測試］不轉送媒體'}}}),
+    f.message('old',{messageTimestamp:1}),
+  ]});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('history')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();await f.bridge.flush();
+  assert.equal(f.callbacks.length,2);
+  assert.deepEqual(f.callbacks.map(c=>JSON.parse(c.init.body).data.key.id),['all-direct','all-lid']);
+  assert.equal(f.bridge.status().testMode.count,0);assert.equal(f.bridge.status().testMode.deliveryEnabled,false);
+  assert.equal(f.mappingRequests.length,0);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number,text:'test',linkPreview:false})).status,403);
+  assert.equal(f.calls.length,0);
+});
+
+test('broad receiving closes prior sender and later explicit sending remains limited to test recipients',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();await f.allow();
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,true);
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number,text:'test',linkPreview:false})).status,409);
+  await f.allow();
+  assert.equal(f.bridge.status().inboxScope.mode,'test');
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number:'85255550999',text:'test',linkPreview:false})).status,403);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number,text:'［合成測試］明確範圍',linkPreview:false})).status,201);
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].jid,address);
+});
+
+test('owner-consented receiving and queued inbound survive restart without activating any sender',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-wa-inbox-restart-'));
+  const first=await fixture(t,{dir,keep:true,fetchImpl:async()=>{throw Error('synthetic failure');}});let second;
+  t.after(async()=>{await first.bridge.close();await second?.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  await first.connect();await first.register();
+  await first.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  first.socket.ev.emit('messages.upsert',{type:'notify',messages:[first.message('persisted-broad-inbound')]});
+  await new Promise(resolve=>setImmediate(resolve));await first.bridge.flush();
+  assert.equal(first.bridge.status().webhook.pending,1);await first.bridge.close();
+  second=await fixture(t,{dir,keep:true});second.advance(120000);await second.connect();await second.bridge.flush();
+  assert.equal(second.bridge.status().inboxScope.mode,'all_private_text');
+  assert.equal(second.bridge.status().inboxScope.consented,true);
+  assert.equal(second.bridge.status().testMode.deliveryEnabled,false);assert.equal(second.bridge.status().testMode.count,0);
+  assert.equal(second.callbacks.length,1);assert.equal(JSON.parse(second.callbacks[0].init.body).data.key.id,'persisted-broad-inbound');
+});
+
+test('revoked or malformed broad scope purges out-of-scope pending bodies and stays fail-closed',async t=>{
+  const f=await fixture(t,{fetchImpl:async()=>{throw Error('synthetic unavailable callback');}});await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('to-revoke')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.bridge.status().webhook.pending,1);
+  assert.equal((await f.api(path,'PUT',{mode:'test',consent:true})).status,200);
+  assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().inboxScope.mode,'test');
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('before-malformed')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.bridge.status().webhook.pending,1);
+  assert.equal((await f.api(path,'PUT',{mode:'everything',consent:true})).status,409);
+  assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().inboxScope.mode,'test');
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);assert.equal(f.calls.length,0);
+});
+
+test('a delayed incoming LID resolution cannot cross an owner receive-scope change',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  let release;f.socket.signalRepository.lidMapping.getPNForLID=()=>new Promise(resolve=>{release=resolve;});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('stale-mapping',{key:{id:'stale-mapping',remoteJid:'123456789@lid',fromMe:false}})]});
+  while(!release)await new Promise(resolve=>setImmediate(resolve));
+  await f.api(path,'PUT',{mode:'test',consent:true});
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  release(address);await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,0);assert.equal(f.bridge.status().webhook.pending,0);
+});
+
+test('explicit broad reply gate only answers verified recent incoming and retains correlated receipts',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`,send=()=>f.api(`/message/sendText/${instance}`,'POST',{number,text:'［合成測試］回覆來訊',linkPreview:false});
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('eligible-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal((await send()).status,403);
+  const enabled=await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  assert.equal(enabled.status,200);assert.equal(enabled.data.replyToReceived,true);assert.equal(enabled.data.replyScope,'recent_incoming_only');
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);assert.equal(f.bridge.status().testMode.count,0);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number:'85255550999',text:'test',linkPreview:false})).status,403);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number:linkedNumber,text:'test',linkPreview:false})).status,403);
+  const sent=await send();assert.equal(sent.status,201);assert.equal(f.calls.length,1);
+  f.socket.ev.emit('messages.update',[{key:{id:sent.data.key.id,remoteJid:address,fromMe:true},update:{status:3}}]);
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  const receipt=normalizeEvent(JSON.parse(f.callbacks.at(-1).init.body),instance);
+  assert.equal(receipt.kind,'receipt');assert.equal(receipt.receipts[0].status,'delivered');
+  f.advance(86400000);assert.equal((await send()).status,403);assert.equal(f.calls.length,1);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('renewed-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal((await send()).status,201);
+  f.socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+});
+
+test('broad reply authorization resets on restart and old-account arrivals never authorize another account',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-wa-reply-restart-'));
+  const first=await fixture(t,{dir,keep:true});let second;
+  t.after(async()=>{await first.bridge.close();await second?.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  await first.connect();await first.register();
+  await first.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  first.socket.ev.emit('messages.upsert',{type:'notify',messages:[first.message('other-account-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));await first.bridge.close();
+  second=await fixture(t,{dir,keep:true,loadAuth:async()=>({state:{creds:{registered:true,me:{id:'85255550888:1@s.whatsapp.net'}},keys:{}},saveCreds:async()=>{}})});
+  assert.equal(second.bridge.status().inboxScope.mode,'all_private_text');assert.equal(second.bridge.status().inboxScope.replyToReceived,false);
+  await second.connect();
+  const send=()=>second.api(`/message/sendText/${instance}`,'POST',{number,text:'test',linkPreview:false});
+  assert.equal((await send()).status,403);
+  assert.equal((await second.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true})).status,200);
+  assert.equal((await send()).status,403);assert.equal(second.calls.length,0);
+  second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('new-account-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal((await send()).status,201);
+});
+
+test('changing test-recipient or inbox scope closes broad replies and cannot re-open an older activation',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  assert.equal(f.bridge.status().inboxScope.replyToReceived,true);
+  await f.allow([],false);assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+  let release;f.socket.signalRepository.lidMapping.getLIDForPN=()=>new Promise(resolve=>{release=resolve;});
+  const oldActivation=f.allow();while(!release)await new Promise(resolve=>setImmediate(resolve));
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  release('123456789@lid');assert.equal((await oldActivation).status,409);
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);assert.equal(f.bridge.status().inboxScope.replyToReceived,true);
+  assert.equal((await f.api(path,'PUT',{mode:'test',replyToReceived:true,consent:true})).status,409);
+  assert.equal(f.bridge.status().inboxScope.mode,'test');assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+});
+
+test('a bounded callback batch drains a burst without adding one second per customer text',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:Array.from({length:30},(_,i)=>f.message('burst-'+i))});
+  await new Promise(resolve=>setImmediate(resolve));
+  await f.bridge.flush();assert.equal(f.callbacks.length,25);assert.equal(f.bridge.status().webhook.pending,5);
+  await f.bridge.flush();assert.equal(f.callbacks.length,30);assert.equal(f.bridge.status().webhook.pending,0);
+});
+
+test('phone-side human replies for recent customers become outgoing takeovers while self and unseen echoes stay private',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('known-customer')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  const bot=await f.api(`/message/sendText/${instance}`,'POST',{number,text:'［合成測試］機器回覆',linkPreview:false});
+  assert.equal(bot.status,201);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[
+    f.message('phone-staff',{key:{id:'phone-staff',remoteJid:address,fromMe:true},message:{conversation:'［合成測試］手機人工接手'}}),
+    f.message(bot.data.key.id,{key:{id:bot.data.key.id,remoteJid:address,fromMe:true}}),
+    f.message('self',{key:{id:'self',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true}}),
+    f.message('unseen',{key:{id:'unseen',remoteJid:'85255550999@s.whatsapp.net',fromMe:true}}),
+  ]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,2);
+  const outgoing=JSON.parse(f.callbacks[1].init.body);assert.equal(outgoing.data.key.fromMe,true);assert.equal(normalizeEvent(outgoing,instance).kind,'outgoing');
+  assert.equal(outgoing.data.key.id,'phone-staff');assert.match(outgoing.data.message.conversation,/手機人工接手/);
+});
+
+test('revoking all-private scope purges queued phone-side reply bodies even for a remaining test recipient',async t=>{
+  const f=await fixture(t,{fetchImpl:async()=>{throw Error('synthetic unavailable callback');}});await f.connect();await f.register();await f.allow([number],false);
+  const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('known-customer-for-revoke')]});
+  await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('queued-phone-reply',{key:{id:'queued-phone-reply',remoteJid:address,fromMe:true}})]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.bridge.status().webhook.pending,2);
+  await f.api(path,'PUT',{mode:'test',consent:true});
+  assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().testMode.count,1);
+});
+
+test('test-only reconfiguration revokes broad reception and purges its bodies even if the phone write fails',async t=>{
+  const f=await fixture(t,{fetchImpl:async()=>{throw Error('synthetic unavailable callback');}});await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('before-test-only')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.bridge.status().webhook.pending,1);
+  const invalid=await f.api(`/instance/testRecipients/${instance}`,'PUT',{numbers:['invalid'],activateSending:true,consent:true});
+  assert.equal(invalid.status,400);
+  assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().inboxScope.mode,'test');
+  assert.equal(f.bridge.status().inboxScope.consented,false);assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('after-test-only')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.bridge.status().webhook.pending,0);
+});
+
+test('a persisted broad receive grant cannot transfer to another or unresolved linked account',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-wa-account-scope-'));
+  const first=await fixture(t,{dir,keep:true,fetchImpl:async()=>{throw Error('synthetic unavailable callback');}});let second;
+  t.after(async()=>{await first.bridge.close();await second?.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  await first.connect();await first.register();
+  await first.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  first.socket.ev.emit('messages.upsert',{type:'notify',messages:[first.message('old-account-body')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(first.bridge.status().webhook.pending,1);await first.bridge.close();
+  second=await fixture(t,{dir,keep:true,loadAuth:async()=>({state:{creds:{registered:true,me:{id:'85255550888:1@s.whatsapp.net'}},keys:{}},saveCreds:async()=>{}})});
+  await second.bridge.flush();assert.equal(second.callbacks.length,0);assert.equal(second.bridge.status().webhook.pending,1);
+  await second.connect();assert.equal(second.bridge.status().inboxScope.mode,'test');assert.equal(second.bridge.status().inboxScope.consented,false);
+  assert.equal(second.bridge.status().webhook.pending,0);assert.equal(second.bridge.status().inboxScope.replyToReceived,false);
+  second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('new-unconsented-account')]});
+  await new Promise(resolve=>setImmediate(resolve));await second.bridge.flush();assert.equal(second.callbacks.length,0);
+  const scope=await second.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  assert.equal(scope.status,200);assert.doesNotMatch(JSON.stringify(scope.data),/8525555/);
+  second.socket.user.id='123456789@lid';
+  second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('unresolved-owner')]});
+  await new Promise(resolve=>setImmediate(resolve));await second.bridge.flush();
+  assert.equal(second.callbacks.length,0);assert.equal(second.bridge.status().inboxScope.mode,'test');
 });

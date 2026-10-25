@@ -1,6 +1,6 @@
 # 安裝客服卡片與真實渠道
 
-版本：0.3.0-preview.2。先讀 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)、[卡片設計](BLUEPRINT_PLUGIN_DESIGN.md) 及 [架構](ARCHITECTURE.md)。
+版本：0.4.0-preview.1。先讀 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)、[卡片設計](BLUEPRINT_PLUGIN_DESIGN.md) 及 [架構](ARCHITECTURE.md)。
 
 ## 安裝成果的界線
 

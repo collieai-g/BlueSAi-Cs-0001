@@ -114,7 +114,7 @@ test('receipt inbox and evidence survive restart without resending uncertain wor
     assert.equal(store.get('SELECT status FROM messages WHERE id=?', id).status, 'delivered');
     assert.ok(store.get('SELECT last_incoming_at,last_receipt_at FROM channel_activity').last_receipt_at);
     assert.equal(sends, 0);
-    assert.deepEqual(store.all('SELECT version FROM schema_migrations').map(row => row.version), [1, 2, 3, 4]);
+    assert.deepEqual(store.all('SELECT version FROM schema_migrations').map(row => row.version), [1, 2, 3, 4, 5]);
   } finally { await engine.stop(); store.close(); }
 });
 

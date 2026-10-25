@@ -6,6 +6,7 @@ import { ServiceError } from './engine.js';
 import { normalizeEvent } from './evolution.js';
 import { createDotTasks } from './dot-tasks.js';
 import { createWebChat } from './web-chat.js';
+import { createInboxContext } from './inbox-context.js';
 import identity from '../agent.json' with { type: 'json' };
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
@@ -36,6 +37,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   if (webhookSecret && webhookSecret.length < 32) throw new Error('WEBHOOK_SECRET must contain at least 32 characters');
   const sessions = new Map(); const failures = new Map();
   const dotTasks = workbench ? createDotTasks(store) : null;
+  const inboxContext = workbench ? createInboxContext({store,engine}) : null;
+  const eventStreams = new Set();
   engine.webChatEnabled = webChatEnabled;
   const webChat = createWebChat({ store, engine, cookieSecure, enabled: webChatEnabled });
   if(!/^[a-zA-Z0-9_]+$/.test(sessionCookieName))throw new Error('Invalid cookie name');
@@ -104,6 +107,33 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (path === '/api/logout' && method === 'POST') {
           sessions.delete(session); res.setHeader('Set-Cookie', cookie('', 0)); return json(res, 200, { ok: true });
         }
+        if (workbench && path === '/api/workbench/inbox/events' && method === 'GET') {
+          if(eventStreams.size>=20)throw new ServiceError('已開啟太多即時對話窗口。',429);
+          res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no'});
+          let closed=false,unsubscribe=()=>{},heartbeat;
+          const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);unsubscribe();eventStreams.delete(close);res.end();};
+          const hint=()=>{if(closed)return;if((sessions.get(session)||0)<Date.now()){close();return;}res.write('event: change\ndata: {"changed":true}\n\n');};
+          unsubscribe=store.subscribe(hint);eventStreams.add(close);
+          heartbeat=setInterval(()=>{if((sessions.get(session)||0)<Date.now())close();else if(!closed)res.write(': keepalive\n\n');},15000);heartbeat.unref();
+          req.on('close',close);res.on('close',close);hint();return;
+        }
+        if (workbench && path === '/api/workbench/inbox' && method === 'GET') {
+          const status=engine.inboxStatus();
+          const conversations=store.conversations().filter(c=>['evolution','web'].includes(c.channel));
+          const actualIds=new Set(conversations.map(c=>c.id));
+          const pendingHandoffs=status.pending.filter(t=>actualIds.has(t.conversationId));
+          return json(res,200,{...status,conversations,pendingHandoffs,pendingCount:pendingHandoffs.length,revision:store.value('revision')});
+        }
+        if (workbench && path === '/api/workbench/inbox/config') {
+          if(method==='GET')return json(res,200,engine.inboxStatus());
+          if(method==='PUT')return json(res,200,engine.configureInbox(await body(req)));
+        }
+        if (workbench && path === '/api/workbench/inbox/faq') {
+          if(method==='GET')return json(res,200,{rules:engine.listFaq()});
+          if(method==='POST')return json(res,201,engine.addFaq(await body(req)));
+        }
+        if (inboxContext && path === '/api/workbench/inbox/context' && method === 'GET') return json(res,200,inboxContext.capture(new URL(req.url,'http://localhost').searchParams.get('conversationId')));
+        if (inboxContext && path === '/api/workbench/inbox/draft' && method === 'POST') return json(res,201,inboxContext.save(await body(req)));
         if (dotTasks && path === '/api/workbench/dot/tasks') {
           if (method === 'GET') return json(res, 200, { tasks: dotTasks.list() });
           if (method === 'POST') {
@@ -130,7 +160,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           const text=string((await body(req)).text,2000);
           if(store.get('SELECT count(*) AS n FROM knowledge').n>=100)throw new ServiceError('已達 100 條記憶，請先整理舊記憶。');
           const history=store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 12) ORDER BY id');
-          let learned;try{learned=await engine.agent.learn(text,history);}catch{throw new ServiceError('訓練未完成，沒有新增記憶。請檢查 AI 接駁後再試。',502);}
+          let learned;try{learned=engine.inboxPolicy().enabled?{remember:true,title:text.slice(0,28),category:'general',content:text,text:'已保存原文為待確認記憶；直接回覆請另外建立已確認問題與答案。'}:await engine.agent.learn(text,history);}catch{throw new ServiceError('訓練未完成，沒有新增記憶。請檢查 AI 接駁後再試。',502);}
           const id=randomUUID();
           store.transaction(()=>{
             if(learned.remember){
@@ -143,6 +173,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           });return json(res,201,{ok:true});
         }
         if (workbench && path === '/api/workbench/trial' && method === 'POST') {
+          if(engine.inboxPolicy().enabled)throw new ServiceError('目前使用知識庫直接回覆模式，不會呼叫模型。請在即時對話處理來訊，或新增已確認的問題與答案。',409);
           const input=await body(req),text=string(input.text,2000);
           if(!Array.isArray(input.history)||input.history.length>100)throw new ServiceError('試聊背景無效。');
           const history=input.history.slice(-24).map(x=>({role:choice(x.role,['user','assistant']),content:string(x.content,2000)}));
@@ -161,6 +192,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           if(method==='POST'&&action==='whatsapp-webhook')return json(res,200,await workbench.registerWebhook());
           if(method==='POST'&&action==='whatsapp-webhook-check')return json(res,200,await workbench.checkWebhook());
           if(method==='POST'&&action==='whatsapp-test-recipients')return json(res,200,await workbench.configureTestRecipient(await body(req)));
+          if(method==='GET'&&action==='whatsapp-inbox')return json(res,200,await workbench.getInboxScope());
+          if(method==='POST'&&action==='whatsapp-inbox')return json(res,200,await workbench.configureInboxScope(await body(req)));
           if(method==='DELETE'&&action==='whatsapp'){await workbench.clearWhatsApp();return json(res,200,{ok:true});}
         }
         if (workbench && path === '/api/workbench/conversations' && method === 'GET') return json(res,200,{conversations:store.conversations()});
@@ -222,7 +255,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         const conv = path.match(/^\/api\/conversations\/([\w-]+)(?:\/(takeover|resume|reply))?$/);
         if (conv) {
           const id = conv[1]; engine.requireConversation(id);
-          if (method === 'GET' && !conv[2]) return json(res, 200, { conversation: store.conversation(id), messages: store.messages(id) });
+          if (method === 'GET' && !conv[2]) return json(res, 200, { conversation: store.conversation(id), messages: store.messages(id), revision:store.value('revision') });
           if (method === 'DELETE' && !conv[2]) {
             if (store.get("SELECT id FROM messages WHERE conversation_id=? AND status='sending'", id)) throw new ServiceError('仍有訊息正在發送，請稍後再刪除。',409);
             if (engine.running) throw new ServiceError('正在處理訊息，請稍後再刪除。',409);
@@ -242,6 +275,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         '/chat':['chat.html','text/html; charset=utf-8'], '/chat.js':['chat.js','text/javascript; charset=utf-8'], '/chat.css':['chat.css','text/css; charset=utf-8'],
         '/workbench.js':['workbench.js','text/javascript; charset=utf-8'], '/workbench-api.js':['workbench-api.js','text/javascript; charset=utf-8'], '/workbench.css':['workbench.css','text/css; charset=utf-8'],
         '/agent-handoff.js':['agent-handoff.js','text/javascript; charset=utf-8'],
+        '/inbox-tools.js':['inbox-tools.js','text/javascript; charset=utf-8'],
         '/vendor/blueprint-style.css': ['vendor/blueprint-style.css','text/css; charset=utf-8'],
         '/vendor/blueprint-studio.css': ['vendor/blueprint-studio.css','text/css; charset=utf-8'], '/brand.svg': ['brand.svg','image/svg+xml'] };
       if (method === 'GET' && assets[path]) {
@@ -255,5 +289,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
     }
   });
   server.requestTimeout = 15000; server.headersTimeout = 10000;
+  const closeServer=server.close.bind(server);
+  server.close=(...args)=>{for(const close of [...eventStreams])close();return closeServer(...args);};
   return server;
 }

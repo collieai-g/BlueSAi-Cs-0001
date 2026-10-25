@@ -1,6 +1,6 @@
 # 藍圖工作室內置客服插件：介面與卡片規格
 
-設計基準：0.3.0-preview.2，2026-10-25。項目：BlueSAI-客服；Agent：`BlueSAi-Cs-#0001`。
+設計基準：0.4.0-preview.1，2026-10-25。項目：BlueSAI-客服；Agent：`BlueSAi-Cs-#0001`。
 
 本文件的介面與資料禁止事項以 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md) 為固定合約；舊整頁管理畫面只作歷史診斷，不是 Agent UI。
 
