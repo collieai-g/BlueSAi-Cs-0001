@@ -5,6 +5,9 @@ on:
     branches: [main, 'codex/**']
 permissions:
   contents: read
+concurrency:
+  group: preview-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   verify:
     strategy:
@@ -13,6 +16,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.0'
@@ -20,7 +25,9 @@ jobs:
       - run: npm run check
       - name: Read-only contract fixture preflight
         shell: pwsh
-        run: node tools/preflight.js --host integrations/blueprint/fixtures/host.json --mode collaboration --source "${{ github.sha }}"
+        run: |
+          $revision = git rev-parse HEAD
+          node tools/preflight.js --host integrations/blueprint/fixtures/host.json --mode collaboration --source $revision
       - name: Build exact committed preview artifact
         shell: pwsh
         run: node tools/package-release.js --output "${{ runner.temp }}/bluesai-release"
