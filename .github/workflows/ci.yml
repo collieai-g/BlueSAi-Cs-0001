@@ -23,6 +23,8 @@ jobs:
           node-version: '24.22.0'
       - run: npm test
       - run: npm run check
+      - name: Verify pinned local WhatsApp bridge dependencies without starting an account
+        run: npm ci --prefix integrations/whatsapp-local --ignore-scripts --omit=optional
       - name: Read-only contract fixture preflight
         shell: pwsh
         run: |

@@ -1,26 +1,26 @@
-請按固定版本的 BlueSAi-Cs-0001 套件，安裝或更新我已指定的藍圖工作室客服 Agent。
+請把 BlueSAi-Cs-0001 作為我現有 Blueprint Studio「AI → Agent 工作台」內的一個客服卡片項目安裝或更新。
 來源：https://github.com/collieai-g/BlueSAi-Cs-0001
 
-先讀 AGENTS.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.3.0-preview.1 是預覽；沒有正式 Release 時，不把 main 或歷史私人適配稱作正式版。
+先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.3.0-preview.2 是預覽；固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。
 
-1. 沿用目前已核實的工作室、公司、平台、GitHub、Site 及安裝 operation_id。先用只讀 preflight 核對實際宿主來源 commit、合約、renderer、API、資料域及模式；在變更或備份之前列出 unsupported 缺項。只有未決而必要的選擇才問用戶，不重新索取已知身份或秘密。
+1. 客服只能是一個已登記 Agent 項目。入口與配置為同一項目的狀態，基本設定／訓練／接駁與自己的客戶對話都在同一卡片內容區。只掛載客服根節點及 /api/agents/bluesai-cs-0001；外層導覽、身份及排版由宿主管理。
 
-2. 分開 collaboration、web-chat、whatsapp 及持續 AI。接駁頁要提供「接駁 WhatsApp」及「接駁網頁」四步教學。用戶只要求教學或版面時，完成引導及原有功能更新；不因此啟用帳戶、發送、付費服務或公開主機。教學的安裝指引按鍵只準備步驟草稿，實際安裝依另外明確的用戶指示。
+2. 禁止以整頁客服取代宿主「總覽、工作、資料」、側欄、頂列、全域路由、CSS 或資料庫。不能把舊診斷介面搬進工作室，不代理宿主整個 /api，不直接共用或改寫宿主業務表。只經明確授權的受限整合讀取指定公司來源；客服自己的儲存、設定及對話保持獨立範圍。
 
-3. 固定含套件 manifest 的完整客服 commit，核對 source.tar／release.json 雜湊。使用 integrations/blueprint/agent.json 的 bluesai-cs-0001；根目錄 agent.json 只是產品顯示身份 BlueSAi-Cs-#0001。正常受支援安裝使用已驗證套件，不在現場重寫核心 UI／API。
+3. 沿用已知工作室、公司、GitHub、Site、儲存及原 operation_id。先做只讀 preflight，列出真正宿主合約、renderer、API、執行器及 schema 能力。缺少能力先說明哪項不能運行及下一個可執行步驟，不用整頁、iframe、localhost 或覆蓋宿主主列避開限制。
 
-4. 同一安裝工作使用 preflight、plan、backup_gate、apply、register_or_update、verify、complete／waiting_user 及 CAS expected_version。沿用原 operation_id、相同計劃摘要、來源檢查點和已完成階段。重用真正涵蓋相同 scope、schema、checkpoint、可讀私人副本及還原驗證的備份收據。D1 備份不能冒充外部 SQLite 備份。共用 journal 是宿主協調器接入的工具，不是已自動部署的宿主流程。
+4. 分開來源已發佈、Agent 已登記、卡片可見、設定已讀回、手機已連結、來訊已保存、provider 接受及真正送達。本次用戶要求真實 WhatsApp 時，完成真實連結裝置／收件／回覆路線；不能用離線問答、模擬 provider 或網頁扮演客人代替。
 
-5. 私人安裝記錄及商戶資料保留在程式倉庫之外。現有修改、登入、權限、空白欄位、批准／撤銷、人工接手、未完成工作及歷史草稿不得重設。遷移前停止及驗證備份；失敗依原始資料還原，不靜默打開發送或自動回覆。
+5. 手機 QR 必須來自真正接駁服務，由本人手機確認及掃碼。先選本人同意的指定測試號碼／allowlist，再核對 callback 及發送範圍；空名單的本機橋接只提供 QR／狀態，不轉送或發送其他客戶訊息。首次可用人工回覆驗證，不要求模型金鑰。自動 AI 另行設定可用模型、批准資料及發送模式。
 
-6. 使用正式宿主接口找原 Agent ID。可登記時用版本化 manifest、固定來源及受限身份，保存後讀回同 ID。已存在且相符時重用；此 preview 不提供通用宿主 manifest 原地升級接口，不能另加第二張卡片避開不相容。只有登記或設定改動且宿主來源不變時，不重新部署 Site。
+6. 使用套件內相容 manifest 與固定來源。已有相同實例時重用原 ID，依 expected_version／CAS 更新並讀回，不重複加卡片。共享 preflight、plan、backup_gate、apply、register_or_update、verify、complete／waiting_user 工作及備份 coverage；同一指示重跑先接續原階段，不重複備份、註冊或部署。
 
-7. Sites 原生三分頁 renderer 及完整 D1／R2 客服管理 API 尚未公開實作。套件內的 Sites renderer-contract 是需求合約，不是部署好的相容層。未支援時先說明缺少能力及獨立開發範圍；不用完整 iframe、localhost 或公開原生 Python 接口冒充 Sites 後台。維持同一實際儲存及身份，不套用新站 gateway 覆蓋已有資料。
+7. 變更前保存能還原的資料副本，驗證 scope、schema、checkpoint、可讀私人副本及還原結果。D1 備份不涵蓋外部 SQLite 或手機登入狀態。保留既有登入、公司資料、空白欄位、批准／撤銷、人工接手、未完成工作及歷史；不加入虛構商戶資料，不靜默打開自動回覆或對客發送。
 
-8. Node 客服執行器使用受支援 Node 24.22+（24.x）、單程序及一商戶一私人資料目錄。/workbench.html 和 /console 共用同一核心；3101 是隔離預覽。WhatsApp 採固定 Evolution instance、認證 webhook、持久去重、人工核對、發送開關及回執。客人網頁使用受限會話接口，不取得 owner 工具。只有用戶選擇真實接駁時，才設定安全入口及由本人手機掃碼；背景模型另需可用模型設定，不能假設目前 Codex 對話會持續執行。
+8. 完整通用 Sites D1／R2 管理 API、原生三分頁 renderer 及宿主 manifest 原地升級尚未由此套件交付。需要宿主擴充時先交付相容層並驗證，不把登記當作安裝完成。只有客服設定／登記改動且宿主來源未變時，不重新部署宿主。Node／SQLite 後台獨立持久運行，不能原封不動放進 Workers。
 
-9. 執行 npm test、npm run check 和宿主必要檢查，驗證當前工具／UI 同 ID 保存讀回、重啟、手機、200% 縮放及原生尺寸。合成資料清楚標示；測試記憶驗收後撤銷，不把歷史測試當作當前證據。原生最後送出仍由本人操作。新渠道須用指定測試入口核對客人實際收到；accepted 不當 delivered，結果不明先核對，不能盲目重發。
+9. 執行客服及宿主要求的檢查；驗證保存及同 ID 讀回、批准／撤銷、過期、人工接手、重啟、320px、真正 200% browser zoom 及卡片尺寸。真實 WhatsApp 用指定手機完成同筆來訊、核對回覆及實際收件；accepted 不當 delivered，uncertain 先核對不盲目重發。本人尚未掃碼或送出原生交接時，標為 waiting_user。
 
-10. 按授權範圍更新 GitHub 及真正受影響的原有 Site。GitHub 與 Site 的來源、提交、儲存及發佈版本分別核對；只有推送程式就如實列為程式已發佈。交付完成、requires_setup、unsupported、not_verified 及 waiting_user 的具體項目，私人接續記錄放倉庫之外，不公開部署身份、憑證、聊天或備份。
+10. 按用戶當次授權更新真正受影響的來源及原 Site，核對各自 commit、版本、儲存及存取權限；沒有修改宿主就明說。私人部署身份、商戶資料、憑證、登入狀態、日誌及備份留在 Git 之外。新增收費資源先由用戶決定。
 
-只問尚未取得而必要的資料。有工具時完成已授權的實作及驗證；無需因例行測試、唯讀檢查或已授權的可逆修改再要求確認。新增費用、未知目標、必要帳戶登入或本人操作時，先把可獨立完成的部分做好，再指出精確下一步。
+完成後交付：實際來源、卡片與 API 範圍、宿主內容未被客服替換的核對結果、運行服務、持久資料、真實 WhatsApp 階段及缺項。只問未取得而必要的資料；先把可獨立完成的已授權工作做好，不以「已連接」概括未驗證能力。

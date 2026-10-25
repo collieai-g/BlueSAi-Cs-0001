@@ -25,12 +25,14 @@ test('all login shell assets load locally with correct MIME, without exposing pr
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await engine.stop(); store.close(); });
   const base = 'http://127.0.0.1:' + server.address().port;
   const html = await (await fetch(base)).text();
+  assert.match(html, /登入客服卡片/);
+  assert.match(html, /id="cs-card-design"/);
   const assets = [...new Set([...html.matchAll(/(?:src|href)="(\/[^"#]+)"/g)].map(match => match[1]))];
   assert.ok(assets.length > 0);
   for (const path of assets) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200, path);
-    const mime = path.endsWith('.html') ? 'text/html' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript';
+    const mime = path === '/chat' || path.endsWith('.html') ? 'text/html' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript';
     assert.ok(response.headers.get('content-type').startsWith(mime), path);
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.match(response.headers.get('content-security-policy'), /script-src 'self'; style-src 'self'/);

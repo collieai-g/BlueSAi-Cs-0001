@@ -100,7 +100,7 @@ test('training uses structured model output and reply styles cannot masquerade a
 
 test('local workbench serves all assets and does not expose its design source or credentials',async t=>{
   const {base}=await httpFixture(t);const html=await(await fetch(base)).text();
-  assert.match(html,/本機客服工作台/);assert.match(html,/data-training-form/);
+  assert.match(html,/客服 Agent 卡片/);assert.match(html,/data-training-form/);
   for(const match of html.matchAll(/(?:href|src)="(\/[^"#]+)"/g))assert.equal((await fetch(base+match[1])).status,200);
   for(const path of ['/admin-token','/design/customer-agent-card-design.html','/src/connections.js'])assert.equal((await fetch(base+path)).status,404);
 });

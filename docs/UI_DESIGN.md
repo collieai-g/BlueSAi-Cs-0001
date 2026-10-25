@@ -1,36 +1,33 @@
-# 客服工作台介面
+# 客服 Agent 卡片介面
 
-版本：0.2.0，2026-10-24。
+版本：0.3.0-preview.2，2026-10-25。此文件取代早期把整套客服管理後台當成 Agent 入口的呈現方式。
 
-## 最新插件介面
+## 固定介面邊界
 
-BlueSAI-客服專為藍圖工作室的內置插件用途設計。最新入口是「AI → Agent 工作台」客服卡片；基本設定、訓練、接駁統一放在一張設定卡片內。詳細結構、原生縮放與移動、每種卡片固定最小／預設／最大尺寸、窄畫布例外及實作狀態，以 [BLUEPRINT_PLUGIN_DESIGN.md](BLUEPRINT_PLUGIN_DESIGN.md) 為準。
+正式入口為「AI → Agent 工作台 → BlueSAI 客服」。客服只是一個已登記的 Agent 卡片項目，入口與配置是同一實例的狀態。整體限制見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
 
-本機 3101 版使用工作室外殼預覽插件，目前未接入宿主排版引擎。其介面來源為 `design/customer-agent-card-design.html`，由 `tools/build-workbench.py` 產生 `public/workbench.*`；不可只改產出檔案。下面記錄原有 3100 服務的共用資產與介面，供兼容維護。
+卡片不渲染工作室的側欄、頂列、公司切換或「總覽／工作／AI／資料」主導覽，也不提供能替換宿主這些頁面的安裝包。宿主負責外層導覽、身份、主題及排版；客服只管理自己的根節點及資料。
 
-## 參考來源
+三個分頁固定在同一張配置卡片內：基本設定、訓練、接駁。客戶來訊、核對、人工接手及回覆留在卡片自己的內容區，不要求使用者離開 Agent 進入另一套客服總覽網站。
 
-採用 [Blueprint Studio Open Source v2.7.3](https://github.com/collieai-g/Blueprint-Studio-Open-Source/tree/ea20229b1bbdb5cb55f42456d4b962d66d6898e7) 的實際前端，固定於 commit `ea20229b1bbdb5cb55f42456d4b962d66d6898e7`。
+## 操作與真實狀態
 
-原版 `library_web/style.css`、`library_web/studio.css`、`library_web/brand.svg` 及 MIT 授權完整保留；只統一為 UTF-8、LF 換行。對應檔案和 SHA-256 見 [UI_SOURCE.json](../UI_SOURCE.json)。圖示路徑參考原版 `library_web/app.js`。
+- 「接駁 WhatsApp」為本次主要流程：檢查服務、取得真正 QR、本人手機掃碼、核對收件及指定號碼試覆。
+- WhatsApp 手機狀態與 AI 模型狀態分開顯示；沒有模型金鑰不代表手機不能連結或人工回覆不能測試。
+- 卡片就緒、服務設定齊全、手機 open、來訊已保存、provider accepted、手機送達是不同觀察結果。
+- 不能用離線答案或網頁扮演客人的成功畫面宣稱 WhatsApp 已測試。
+- 缺少能力時，畫面說明缺少什麼、目前能做什麼，以及下一個可執行步驟；不使用一個籠統的「已連接」覆蓋所有狀態。
 
-## 共用外觀與客服內容
+## 表單與閱讀
 
-直接使用原版字體、色彩、方格背景、224px 側欄、68px 頂列、主列圖示、導覽按鈕、卡片和表單樣式。原版四項主列「總覽／工作／AI／資料」及左下角設定的位置相同。保留專用名稱 BlueSAI-客服 及完整編號 `BlueSAi-Cs-#0001`。
+空白商戶欄位保持空白。訓練原文預設待確認；批准、撤銷及失效維持後台控制。切換分頁、查看對話及背景狀態更新保留未儲存輸入。按鍵寫出實際操作結果。
 
-客服內容重新排列：總覽看待辦；工作處理對話；AI 設定指令與試聊；資料確認知識；設定控制回覆方式。這是客服用途的共用介面，不是把 Studio 的資產庫、看板拖放、工作流程及 AI 供應商設定搬過來。功能、內容與資料量不同，不能把共用樣式相同說成每一頁逐像素相同。
+本機卡片的來源是 `design/customer-agent-card-design.html`，由 `tools/build-workbench.py` 產生 `public/workbench.*`；不可只改產出檔案。HTTP client 放 `public/workbench-api.js`，只呼叫 `/api/agents/bluesai-cs-0001`。
 
-桌面核對共用元件的 computed styles，並以原版與客服版實際瀏覽器畫面作目視比較。手機再檢查內容可讀性、換行及操作；驗證範圍見 [VERIFICATION.md](VERIFICATION.md)。
+卡片尺寸、24px 宿主方格、窄畫布閱讀模式、320px 與 200% zoom 驗收依 [BLUEPRINT_PLUGIN_DESIGN.md](BLUEPRINT_PLUGIN_DESIGN.md)。未完成的宿主拖移／縮放整合不得寫成可用。
 
-## 簡單易明的規則
+## 共用資產及舊介面
 
-- 一頁一個主要工作，按鈕寫出結果，例如「確認採用」「我來接手」。
-- 用短句解釋狀態：草稿尚未發送、試聊不發 WhatsApp、已設定不等於已連線。
-- 空白就是未知；不預填商戶名稱、價錢、政策或示範對話。
-- 總覽數字來自實際資料；沒有資料時顯示下一步。
-- 從對話整理的知識預設待確認，不因新版面而改變批准或發送規則。
-- 手機選單可用鍵盤操作；背景更新不清除未儲存的輸入。
+共用 Blueprint 資產固定於 `UI_SOURCE.json` 記錄的 commit，MIT 聲明及雜湊保留。不能直接修改 `public/vendor/` 來影響整個宿主；卡片樣式只作用於客服根節點。
 
-## 後續維護
-
-不要修改 `public/vendor/` 的原版 CSS。客服專屬排版放在 `public/style.css`；若要跟進 Studio 新版，明確更新固定 commit、複製檔案、更新來源雜湊及授權，再重新比對桌面和手機。瀏覽器不從 GitHub 即時載入樣式，因此上游更新不會突然改動現有安裝。
+早期 `public/index.html`／`public/app.js` 的整頁工具保留作獨立診斷，僅在 `/diagnostics/console` 明確使用。它不是正式 Agent UI，不能搬進工作室或替換宿主的任何主列。歷史截圖及驗證記錄只證明當時版本，不能代證本版卡片或真實手機測試。
