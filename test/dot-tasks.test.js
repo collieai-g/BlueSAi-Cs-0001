@@ -251,8 +251,10 @@ test('DOT task migration and restart preserve existing handoff state and immutab
   const window = store.all('SELECT * FROM response_windows');
   store.set('profile', { ...store.value('profile'), name: '保留商戶' });
   await engine.stop();
-  // Build an actual v1-shaped database by removing only the new v2 objects.
-  store.db.exec('DROP TABLE dot_tasks; DELETE FROM schema_migrations WHERE version=2');
+  // Build an actual v1 database, removing all later additive objects.
+  store.db.exec(`DROP TABLE dot_tasks; DROP TABLE provider_receipts; DROP TABLE channel_activity;
+    DROP TABLE web_chat_sessions; ALTER TABLE messages DROP COLUMN provider_instance;
+    DELETE FROM schema_migrations WHERE version>=2`);
   store.close();
   first = await fixture(t, { path });
   assert.equal(first.store.value('profile').name, '保留商戶');
@@ -265,7 +267,7 @@ test('DOT task migration and restart preserve existing handoff state and immutab
   const reopened = new Store(path);
   try {
     const rows = reopened.all('SELECT version FROM schema_migrations ORDER BY version');
-    assert.deepEqual(rows.map(x => x.version), [1, 2]);
+    assert.deepEqual(rows.map(x => x.version), [1, 2, 3, 4]);
     const persisted = reopened.get('SELECT * FROM dot_tasks WHERE id=?', task.id);
     assert.deepEqual(persisted, original);
     assert.deepEqual(reopened.all('SELECT * FROM handoff_tasks'), handoff);

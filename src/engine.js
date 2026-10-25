@@ -10,8 +10,9 @@ export class Engine {
         !Number.isSafeInteger(deadlinePollMs) || deadlinePollMs < 1 || deadlinePollMs > 60000) throw new Error('INVALID_DEADLINE_OPTIONS');
     this.store = store; this.agent = agent; this.evolution = evolution;
     this.now = now; this.responseTimeoutMs = responseTimeoutMs; this.deadlinePollMs = deadlinePollMs;
-    this.running = false; this.dispatching = false; this.stopping = false;
+    this.running = false; this.dispatching = false; this.stopping = false; this.webChatEnabled = false;
     store.recover();
+    for (const m of store.all("SELECT id FROM messages WHERE provider_id IS NOT NULL AND provider_instance IS NOT NULL AND role IN ('assistant','staff')")) this.reconcileReceipts(m.id);
     this.checkDeadlines();
   }
   requireConversation(id) {
@@ -87,7 +88,9 @@ export class Engine {
       }
       this.invalidate(c.id);
       this.store.run('UPDATE conversations SET last_customer_at=MAX(last_customer_at,?) WHERE id=?', timestamp, c.id);
-      const id = this.store.addMessage(c.id, 'user', text, { providerId: channel === 'evolution' ? eventId : null });
+      const id = this.store.addMessage(c.id, 'user', text, { providerId: ['evolution','web'].includes(channel) ? eventId : null, providerInstance: channel === 'evolution' ? this.evolution.instance : null });
+      if (channel === 'evolution' && this.evolution.instance) this.store.run(`INSERT INTO channel_activity(instance,last_incoming_at) VALUES (?,?)
+        ON CONFLICT(instance) DO UPDATE SET last_incoming_at=excluded.last_incoming_at`, this.evolution.instance, receivedAt);
       if (c.state === 'ai') this.openWindow(c.id, id, receivedAt);
       if (review || /真人|人工|投訴|human|complaint/i.test(text)) {
         const window = this.pendingWindow(c.id);
@@ -102,15 +105,43 @@ export class Engine {
   }
   outgoingEcho(event) {
     // Correlated AI echoes must not take over. Unknown outgoing traffic is conservative.
-    if (this.store.get('SELECT id FROM messages WHERE provider_id=? AND role IN (\'assistant\',\'staff\')', event.eventId)) return;
+    if (this.store.get(`SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
+      WHERE m.provider_id=? AND (m.provider_instance IS NULL OR m.provider_instance=?) AND c.channel='evolution' AND c.address=? AND m.role IN ('assistant','staff')`, event.eventId, this.evolution.instance || null, event.address)) return;
     let c = this.store.get("SELECT * FROM conversations WHERE channel='evolution' AND address=?", event.address);
     if (!c) return;
     if (this.store.get('SELECT id FROM events WHERE id=?', `outgoing:${event.eventId}`)) return;
     this.takeover(c.id);
     this.store.transaction(() => {
       this.store.run('INSERT INTO events VALUES (?,?)', `outgoing:${event.eventId}`, Date.now());
-      this.store.addMessage(c.id, 'staff', event.text, { status: 'accepted', providerId: event.eventId });
+      this.store.addMessage(c.id, 'staff', event.text, { status: 'accepted', providerId: event.eventId, providerInstance: this.evolution.instance });
     });
+  }
+  recordReceipt(receipt) {
+    const { instance, providerId, address, status } = receipt;
+    if (!instance || instance !== this.evolution.instance || !['accepted','delivered','read','failed'].includes(status) ||
+        typeof providerId !== 'string' || !providerId || providerId.length > 300 || !/^\d{5,20}@s\.whatsapp\.net$/.test(address)) throw new ServiceError('訊息狀態無效。');
+    return this.store.transaction(() => {
+      const now = this.now();
+      const result = this.store.run('INSERT OR IGNORE INTO provider_receipts VALUES (?,?,?,?,?)', instance, providerId, address, status, now);
+      this.store.run(`INSERT INTO channel_activity(instance,last_receipt_at) VALUES (?,?)
+        ON CONFLICT(instance) DO UPDATE SET last_receipt_at=excluded.last_receipt_at`, instance, now);
+      const message = this.store.get(`SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
+        WHERE m.provider_instance=? AND m.provider_id=? AND c.channel='evolution' AND c.address=? AND m.role IN ('assistant','staff')`, instance, providerId, address);
+      if (message) this.reconcileReceipts(message.id);
+      return { duplicate: result.changes === 0, matched: Boolean(message) };
+    });
+  }
+  reconcileReceipts(messageId) {
+    const m = this.store.get(`SELECT m.*,c.address,c.channel FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?`, messageId);
+    if (!m || m.channel !== 'evolution' || !m.provider_id || !m.provider_instance || !['assistant','staff'].includes(m.role)) return;
+    // A late SERVER_ACK or ERROR must never erase observed delivery/read evidence.
+    const rank = { sending: 0, uncertain: 0, accepted: 1, failed: 2, delivered: 3, read: 4 };
+    if (!(m.status in rank)) return;
+    let next = m.status;
+    for (const r of this.store.all('SELECT status FROM provider_receipts WHERE instance=? AND provider_id=? AND address=?', m.provider_instance, m.provider_id, m.address)) {
+      if (rank[r.status] > rank[next]) next = r.status;
+    }
+    if (next !== m.status) this.store.run('UPDATE messages SET status=? WHERE id=?', next, m.id);
   }
   async processJob(job) {
     this.checkDeadlines();
@@ -129,7 +160,7 @@ export class Engine {
         if (current?.state === 'ai' && current.version === c.version && revision === this.store.value('revision')) {
           const settings = this.store.value('settings');
           const canAuto = settings.mode === 'auto' && result.decision === 'answer' &&
-            (c.channel === 'demo' || (this.agent.configured && this.liveReady()));
+            (c.channel === 'demo' || (this.agent.configured && (c.channel === 'web' ? this.webChatEnabled : this.liveReady())));
           if (result.decision === 'handoff') {
             const window = this.pendingWindow(c.id);
             if (window) this.handoffWindow(window, 'agent_requests_human');
@@ -196,6 +227,10 @@ export class Engine {
       this.store.run("UPDATE messages SET status='cancelled' WHERE id=?", m.id); return;
     }
     if (c.channel === 'demo') { this.beginDispatch(c.id, m, 'simulated'); return; }
+    if (c.channel === 'web') {
+      if (!this.webChatEnabled) { this.store.run("UPDATE messages SET status='failed' WHERE id=?", m.id); return; }
+      this.beginDispatch(c.id, m, 'accepted'); return;
+    }
     if (!this.liveReady() || Date.now() - c.last_customer_at >= 24 * 60 * 60 * 1000) {
       this.store.run("UPDATE messages SET status='failed' WHERE id=?", m.id);
       this.store.audit('send_gate_blocked', m.id); return;
@@ -205,7 +240,10 @@ export class Engine {
     if (!this.beginDispatch(c.id, m, 'sending')) return;
     try {
       const result = await this.evolution.send(c.address, m.content);
-      this.store.run("UPDATE messages SET status='accepted', provider_id=? WHERE id=?", result.providerId, m.id);
+      this.store.transaction(() => {
+        this.store.run("UPDATE messages SET status='accepted', provider_id=? WHERE id=?", result.providerId, m.id);
+        this.reconcileReceipts(m.id);
+      });
     } catch {
       // No automatic retry: HTTP errors/timeouts may still follow a successful send.
       this.store.run("UPDATE messages SET status='uncertain' WHERE id=?", m.id);
@@ -221,6 +259,7 @@ export class Engine {
         this.handoffWindow(window, 'deadline', now); return false;
       }
       this.store.run('UPDATE messages SET status=? WHERE id=?', status, message.id);
+      if (status === 'sending') this.store.run('UPDATE messages SET provider_instance=? WHERE id=?', this.evolution.instance || null, message.id);
       this.closeWindow(id, message.decision === 'clarify' ? 'waiting_customer' : 'submitted',
         message.decision === 'clarify' ? 'clarification_submitted' : 'reply_submitted', now);
       return true;

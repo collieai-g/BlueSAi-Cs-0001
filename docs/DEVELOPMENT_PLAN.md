@@ -45,3 +45,7 @@
 關閉畫面後的自動事件觸發另行實作。若採用 MCP Events，需要持久訂閱及 webhook；它不是按鍵呼叫的前置認證，亦不承擔 30 秒交接期限。[官方 MCP Events](https://developers.openai.com/plugins/build/mcp-events)
 
 完整第一版才包含跨平台同步與私人手機通知。此里程碑不宣稱完成 DOT 接入、Blueprint Integration Contract、通知送達、原生卡片整合或生產部署。
+
+## 0.3.0-preview.1 更新
+
+已加入 WhatsApp／網頁按鍵四步教學、共用 Node 執行器、持久送達回執、受限客人網頁聊天及版本化安裝工具。原生協作 manifest、preflight、共用 operation journal、備份 coverage、CAS／重啟及固定來源產物已用 fixture 測試。完整 Sites 原生管理 renderer／D1 API、宿主 manifest 原地升級、私人 Site 實測及真實渠道驗收仍待完成；不把需求合約當作已可部署相容層。完整對應及限制見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md) 及 [CONNECTION_VERIFICATION.md](CONNECTION_VERIFICATION.md)。

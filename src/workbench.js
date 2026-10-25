@@ -1,6 +1,6 @@
 import { mkdirSync,readFileSync,writeFileSync,existsSync,openSync,closeSync,unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve,relative,isAbsolute } from 'node:path';
+import { resolve,relative,isAbsolute,sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { Store } from './store.js';
@@ -12,7 +12,7 @@ import { createApp } from './server.js';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const dir=resolve(process.env.BLUESAI_WORKBENCH_DATA||resolve(homedir(),'.bluesai-local-workbench'));
-const rel=relative(root,dir);if(!rel||(!rel.startsWith('..')&&!isAbsolute(rel)))throw new Error('資料必須在程式碼目錄之外。');
+const rel=relative(root,dir);if(!(rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)))throw new Error('資料必須在程式碼目錄之外。');
 mkdirSync(dir,{recursive:true,mode:0o700});
 const lockPath=resolve(dir,'service.lock');
 const lock=openSync(lockPath,'wx',0o600);writeFileSync(lock,String(process.pid));

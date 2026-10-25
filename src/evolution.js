@@ -2,9 +2,25 @@ export function normalizeEvent(payload, instance, now = Date.now()) {
   if (payload?.instance !== instance) throw new Error('INSTANCE_MISMATCH');
   const event = String(payload.event || '').toLowerCase().replaceAll('_', '.');
   if (event === 'messages.set') return { kind: 'ignore', reason: 'history' };
+  if (event === 'messages.update') {
+    // Evolution emits provider acknowledgements with keyId, not its database id.
+    const items = Array.isArray(payload.data) ? payload.data : [payload.data];
+    if (!items.length || items.length > 100) throw new Error('INVALID_RECEIPT');
+    const states = { SERVER_ACK: 'accepted', SENT: 'accepted', DELIVERY_ACK: 'delivered', DELIVERED: 'delivered', READ: 'read', PLAYED: 'read', ERROR: 'failed', FAILED: 'failed' };
+    const receipts = [];
+    for (const data of items) {
+      if (!data || typeof data !== 'object') throw new Error('INVALID_RECEIPT');
+      const providerId = data.keyId, address = data.remoteJid;
+      if (typeof providerId !== 'string' || !providerId || providerId.length > 300 || typeof address !== 'string') throw new Error('INVALID_RECEIPT');
+      if (data.fromMe !== true || !/^\d{5,20}@s\.whatsapp\.net$/.test(address)) continue;
+      const status = states[data.status];
+      if (status) receipts.push({ instance, providerId, address, status });
+    }
+    return { kind: 'receipt', receipts };
+  }
   if (event !== 'messages.upsert') return { kind: 'ignore', reason: 'unsupported_event' };
   const data = payload.data;
-  if (!data || Array.isArray(data) || !data.key || typeof data.key.id !== 'string' || !data.key.id || typeof data.key.fromMe !== 'boolean') throw new Error('INVALID_EVENT');
+  if (!data || Array.isArray(data) || !data.key || typeof data.key.id !== 'string' || !data.key.id || data.key.id.length > 300 || typeof data.key.fromMe !== 'boolean') throw new Error('INVALID_EVENT');
   const address = data.key.remoteJid;
   // LID-only addresses require explicit alias resolution, not suffix guessing.
   if (typeof address !== 'string' || !/^\d{5,20}@s\.whatsapp\.net$/.test(address)) return { kind: 'ignore', reason: 'unsupported_address' };

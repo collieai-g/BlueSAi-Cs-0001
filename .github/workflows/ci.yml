@@ -1,0 +1,30 @@
+name: Verify preview package
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.0'
+      - run: npm test
+      - run: npm run check
+      - name: Read-only contract fixture preflight
+        shell: pwsh
+        run: node tools/preflight.js --host integrations/blueprint/fixtures/host.json --mode collaboration --source "${{ github.sha }}"
+      - name: Build exact committed preview artifact
+        shell: pwsh
+        run: node tools/package-release.js --output "${{ runner.temp }}/bluesai-release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bluesai-preview-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/bluesai-release/

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ServiceError } from './engine.js';
 import { normalizeEvent } from './evolution.js';
 import { createDotTasks } from './dot-tasks.js';
+import { createWebChat } from './web-chat.js';
 import identity from '../agent.json' with { type: 'json' };
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
@@ -30,11 +31,13 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
 
-export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now(), workbench = null, sessionCookieName = 'bp_session' }) {
+export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now(), workbench = null, sessionCookieName = 'bp_session', runtimeMode = false, webChatEnabled = false }) {
   if (adminToken.length < 32) throw new Error('ADMIN_TOKEN must contain at least 32 characters');
   if (webhookSecret && webhookSecret.length < 32) throw new Error('WEBHOOK_SECRET must contain at least 32 characters');
   const sessions = new Map(); const failures = new Map();
   const dotTasks = workbench ? createDotTasks(store) : null;
+  engine.webChatEnabled = webChatEnabled;
+  const webChat = createWebChat({ store, engine, cookieSecure, enabled: webChatEnabled });
   if(!/^[a-zA-Z0-9_]+$/.test(sessionCookieName))throw new Error('Invalid cookie name');
   const cookie = (value, age) => `${sessionCookieName}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cookieSecure ? '; Secure' : ''}`;
   const runtime = () => ({ agent: engine.agent.configured ? 'openai' : 'offline', evolutionConfigured: engine.evolution.configured,
@@ -48,6 +51,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
       const path = new URL(req.url, 'http://localhost').pathname;
       const method = req.method;
       if (path === '/healthz' && method === 'GET') return json(res, 200, { status: 'ok' });
+      if (await webChat(req, res, path)) return;
       if (path === '/webhooks/evolution' && method === 'POST') {
         if (!webhookSecret || !engine.evolution.instance || !equal(req.headers.authorization, `Bearer ${webhookSecret}`)) throw new ServiceError('未獲授權。', 401);
         const payload = await body(req);
@@ -55,6 +59,10 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         try { event = normalizeEvent(payload, engine.evolution.instance); }
         catch { throw new ServiceError('訊息事件無效。'); }
         if (event.kind === 'ignore') return json(res, 200, { ignored: event.reason });
+        if (event.kind === 'receipt') {
+          const results = event.receipts.map(receipt => engine.recordReceipt(receipt));
+          return json(res, 200, { received: true, receiptCount: results.length });
+        }
         if (event.kind === 'outgoing') { engine.outgoingEcho(event); return json(res, 200, { received: true }); }
         const result = engine.receive({ channel: 'evolution', ...event, review: event.review || event.timestamp < activationAt });
         return json(res, 200, { received: true, duplicate: result.duplicate });
@@ -101,7 +109,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if (workbench && path === '/api/workbench' && method === 'GET') return json(res,200,{
           profile:store.value('profile'),settings:store.value('settings'),knowledge:store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
-          training:store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 40) ORDER BY id'),connections:workbench.status(),
+          training:store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 40) ORDER BY id'),connections:{...workbench.status(),webChat:{enabled:webChatEnabled,path:'/chat'}},
         });
         if (workbench && path === '/api/workbench/profile' && method === 'PUT') {
           const input=await body(req),p=input.profile||{},s=input.settings||{};
@@ -141,6 +149,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           if(method==='DELETE'&&action==='model'){await workbench.clearAI();return json(res,200,{ok:true});}
           if(method==='POST'&&action==='whatsapp')return json(res,200,await workbench.whatsapp(await body(req)));
           if(method==='POST'&&action==='whatsapp-check')return json(res,200,await workbench.checkWhatsApp());
+          if(method==='POST'&&action==='whatsapp-webhook')return json(res,200,await workbench.registerWebhook());
+          if(method==='POST'&&action==='whatsapp-webhook-check')return json(res,200,await workbench.checkWebhook());
           if(method==='DELETE'&&action==='whatsapp'){await workbench.clearWhatsApp();return json(res,200,{ok:true});}
         }
         if (path === '/api/state' && method === 'GET') return json(res, 200, {
@@ -216,7 +226,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if (approval && method === 'POST') { const input = await body(req); engine.approve(approval[1], string(input.text,4000,false)); return json(res,200,{ok:true}); }
         throw new ServiceError('找不到此操作。', 404);
       }
-      const assets = { '/': [workbench?'workbench.html':'index.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+      const assets = { '/': [workbench&&!runtimeMode?'workbench.html':'index.html','text/html; charset=utf-8'], '/console': ['index.html','text/html; charset=utf-8'], '/workbench.html':['workbench.html','text/html; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'],
+        '/chat':['chat.html','text/html; charset=utf-8'], '/chat.js':['chat.js','text/javascript; charset=utf-8'], '/chat.css':['chat.css','text/css; charset=utf-8'],
         '/workbench.js':['workbench.js','text/javascript; charset=utf-8'], '/workbench-api.js':['workbench-api.js','text/javascript; charset=utf-8'], '/workbench.css':['workbench.css','text/css; charset=utf-8'],
         '/agent-handoff.js':['agent-handoff.js','text/javascript; charset=utf-8'],
         '/vendor/blueprint-style.css': ['vendor/blueprint-style.css','text/css; charset=utf-8'],

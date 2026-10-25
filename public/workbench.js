@@ -20,6 +20,33 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
     let busy=false;
     let dotTasks=[],selectedTask=null,renderedTaskId=null,taskDraftKey=null;
     let taskReadLease=null,taskReadEpoch=0;
+    let guideFlow=null,guideStep=0;
+    const setupKeys={},setupTasks={};
+    const guideLabels={whatsapp:['準備手機和服務','連結手機','接收訊息','試收試覆'],web:['準備網頁客服','取得聊天網址','加入你的網頁','試問及核對']};
+    function paintGuide(){
+      const active=Boolean(guideFlow);find('[data-guide-header]').hidden=!active;find('[data-guide-nav]').hidden=!active;
+      all('[data-secondary-connect]').forEach(node=>node.hidden=active);
+      all('[data-guide-flow]').forEach(node=>node.hidden=!active||node.dataset.guideFlow!==guideFlow||Number(node.dataset.guideStep)!==guideStep);
+      all('[data-start-guide]').forEach(node=>node.setAttribute('aria-expanded',String(node.dataset.startGuide===guideFlow)));
+      if(!active)return;
+      find('[data-guide-title]').textContent=guideFlow==='whatsapp'?'接駁 WhatsApp':'接駁網頁';
+      find('[data-guide-progress]').textContent=`第 ${guideStep+1} / 4 步 · ${guideLabels[guideFlow][guideStep]}`;
+      find('[data-guide-back]').disabled=guideStep===0;find('[data-guide-next]').textContent=guideStep===3?'完成教學':'下一步';
+      const c=snapshot.connections,wa=c.whatsapp,runtime=c.mode==='runtime';
+      find('[data-guide-wa-ready]').textContent=wa.url&&wa.instance?'接駁服務資料已備妥。下一步會向服務取得真正的二維碼。':'尚未準備接駁服務。你可以先請安裝 AI 幫忙，或繼續閱讀手機操作教學。';
+      find('[data-guide-receive-help]').textContent=runtime?(wa.webhook?.configured?'收件設定已備妥，請按上方按鍵核對。':'收件服務尚未準備好，請把這一步交給安裝 AI 處理。'):'這裡是隔離預覽。正式收件需要客服服務；準備好後在該服務繼續此教學。';
+      find('[data-guide-test-status]').textContent=`手機連線：${wa.status==='open'?'已核對':'尚未核對'}；最近來訊：${wa.evidence?.lastIncomingAt?'已觀察到，請在對話核對測試內容':'尚未觀察到'}；發送開關：${wa.deliveryEnabled?'已開啟':'關閉'}。`;
+      all('[data-runtime-console]').forEach(node=>{node.hidden=!runtime;});
+      const webReady=runtime&&c.webChat?.enabled===true;
+      find('[data-guide-web-ready]').textContent=webReady?'網頁客服已開啟。下一步可以打開聊天頁測試。':'網頁客服尚未開啟。請先讓安裝 AI 準備服務，再回來測試。';
+      const base=c.publicBaseUrl||location.origin,url=webReady?base+'/chat':'';
+      find('[data-web-chat-url]').value=url;find('[data-copy-web-url]').disabled=!webReady;
+      const link=find('[data-open-web-chat]');link.hidden=!webReady;link.href=url||'/chat';
+      const local=webReady&&['localhost','127.0.0.1','[::1]'].includes(new URL(base).hostname);
+      find('[data-web-url-help]').textContent=!webReady?'服務開啟後才會顯示可用網址。':local?'這是本機試用網址，只能在同一部電腦使用。對外分享前，請安裝人員準備公開 HTTPS 網址。':'請先完成最後一步的收發測試，再分享這個網址。';
+      find('[data-web-link-code]').value=webReady&&!local?`<a href="${url}">聯絡客服</a>`:'取得公開聊天網址後，這裡會顯示可交給網站維護人員的連結碼。';
+    }
+    function closeGuide(){const flow=guideFlow;guideFlow=null;paintGuide();if(flow)find(`[data-start-guide="${flow}"]`).focus();}
     const resultDrafts=new Map(),demoTasks=[];
     const form=find('[data-config-form]'), value=(name)=>form.elements.namedItem(name).value;
     const hints={'':'先講答案，再講必要條件。每次只問一個重點。','零售與網店':'先了解客人想買甚麼。價錢、送貨及退換安排，只用已確認的資料。','餐飲':'先了解客人的用餐需要。菜式、價錢、致敏原及訂位安排，沒有資料就交給真人確認。','美容與預約':'先問所需服務。價錢、療程及可約時間，沒有確認就不要承諾。','專業服務':'先了解客人的目的。服務範圍、報價及完成時間，需要已確認的資料。','其他':'先講答案，再講必要條件。每次只問一個重點。'};
@@ -102,8 +129,20 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
       find('[data-memory-count]').textContent=usable+' 條可用';
       const chat=find('[data-training-chat]');chat.replaceChildren();for(const turn of snapshot.training)message(chat,turn.role==='user'?'user':'訓練助手',turn.content);
       const ai=snapshot.connections.ai,wa=snapshot.connections.whatsapp;find('[data-ai-status]').textContent=statusNames[ai.status]||'狀態未確認';find('[data-wa-status]').textContent=statusNames[wa.status]||'狀態未確認';
-      find('[data-runtime-label]').textContent=live?(ai.status==='connected'?'AI 已連接 · 本機實測':'本機實測 · 離線模式'):'設計預覽';
+      const runtime=snapshot.connections.mode==='runtime';
+      find('[data-runtime-label]').textContent=live?`${runtime?'客服收發執行器':'隔離本機預覽'} · ${statusNames[ai.status]||'狀態未確認'}`:'設計預覽';
+      find('[data-runtime-connection]').hidden=!runtime;
+      if(runtime){
+        const f=find('[data-whatsapp-form]');
+        for(const key of ['url','instance']){f.elements[key].value=wa[key]||'';f.elements[key].readOnly=true;f.elements[key].required=false;}
+        f.elements.apiKey.disabled=true;f.elements.apiKey.placeholder='已從伺服器私人設定載入；此頁不顯示';
+        const when=timestamp=>timestamp?new Date(timestamp).toLocaleString('zh-HK'):'尚未觀察到';
+        find('[data-channel-evidence]').textContent=`收件入口：${wa.receiveEnabled?'已設定':'未設定'}；供應商 webhook：${wa.webhook?.registered?'讀回相符':'未核對'}；WhatsApp 發送開關：${wa.deliveryEnabled?'已開啟':'關閉'}。最近來訊：${when(wa.evidence?.lastIncomingAt)}；最近回執：${when(wa.evidence?.lastReceiptAt)}。`;
+        find('[data-channel-help]').textContent='本頁與客戶對話共用同一客服執行器及資料庫。金鑰、PUBLIC_BASE_URL、WEBHOOK_SECRET 及 DELIVERY_ENABLED 由伺服器私人環境設定；工作台不會暗中開啟發送。';
+        find('.bp-preview-label').textContent='客服收發執行器';find('.bp-bottom-caption').textContent='設定、記憶與客戶對話由同一後台保存；收發依上方實際設定及觀察結果。';
+      }
       if(live){find('[data-training-mode]').textContent=ai.status==='connected'?'AI 會參考最近的訓練對話整理記憶。你確認後才用來回答客戶。':'未接駁 AI：會將你教的內容原文存為待確認記憶。';}
+      paintGuide();
     }
     async function refresh(fill=false){invalidateTaskRead();snapshot=await backend.load();paintData(fill);await refreshTasks();}
     async function run(button,fn){if(busy)return;busy=true;const original=button?.textContent;if(button){button.disabled=true;button.textContent='處理中…';}try{await fn();}catch(e){report(e.message||'操作未完成，請再試。',true);}finally{busy=false;if(button){button.disabled=false;button.textContent=original;}if(selectedTask)paintTasks();}}
@@ -145,9 +184,33 @@ document.querySelectorAll('[data-lucide]').forEach(node=>{const paths=icons[name
     document.addEventListener('visibilitychange',invalidateTaskRead);
     find('[data-model-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const key=f.elements.apiKey.value;f.elements.apiKey.value='';find('[data-ai-result]').textContent='正在測試連線及模型回覆…';try{const result=await backend.model({model:f.elements.model.value,apiKey:key});find('[data-ai-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-ai-result]').textContent=e.message;throw e;}});});
     find('[data-disconnect-ai]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearAI();await refresh();find('[data-ai-result]').textContent='AI 接駁已清除。';report('已清除 AI 接駁，回到離線模式。');}));
-    find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const args=Object.fromEntries(new FormData(f));f.elements.apiKey.value='';find('[data-wa-result]').textContent='正在向服務取得二維碼…';find('[data-qr-box]').hidden=true;try{const result=await backend.whatsapp(args);const holder=find('[data-qr-image]');holder.replaceChildren();find('[data-qr-box]').hidden=!result.qr&&!result.preview;if(result.qr){const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';holder.append(img);}else if(result.preview){holder.textContent='二維碼位置示意 · 不可掃描';}find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;await refresh();throw e;}});});
+    find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const args=Object.fromEntries(new FormData(f));f.elements.apiKey.value='';if(!args.url?.trim()||!args.instance?.trim()){f.querySelector('details').open=true;throw new Error('接駁服務尚未準備好。請返回第一步，或請安裝人員填寫服務資料。');}find('[data-wa-result]').textContent='正在向服務取得二維碼…';find('[data-qr-box]').hidden=true;try{const result=await backend.whatsapp(args);const holder=find('[data-qr-image]');holder.replaceChildren();find('[data-qr-box]').hidden=!result.qr&&!result.preview;if(result.qr){const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';holder.append(img);}else if(result.preview){holder.textContent='二維碼位置示意 · 不可掃描';}find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;await refresh();throw e;}});});
     find('[data-wa-check]').addEventListener('click',event=>run(event.currentTarget,async()=>{try{const result=await backend.checkWhatsApp();find('[data-wa-result]').textContent=result.message;if(result.status==='open')find('[data-qr-box]').hidden=true;report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;find('[data-qr-box]').hidden=true;throw e;}finally{await refresh();}}));
     find('[data-wa-clear]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearWhatsApp();find('[data-qr-box]').hidden=true;find('[data-qr-image]').replaceChildren();await refresh();report('已清除本機接駁資料。如要移除手機裝置，請在 WhatsApp 的「已連結裝置」處理。');}));
+    for(const [selector,method] of [['[data-webhook-register]','registerWebhook'],['[data-webhook-check]','checkWebhook']])find(selector).addEventListener('click',event=>run(event.currentTarget,async()=>{try{const result=await backend[method]();find('[data-wa-result]').textContent=result.message;report(result.message);}finally{await refresh();}}));
+    all('[data-start-guide]').forEach(button=>button.addEventListener('click',()=>{guideFlow=button.dataset.startGuide;guideStep=0;paintGuide();find('[data-guide-title]').focus();}));
+    find('[data-guide-close]').addEventListener('click',closeGuide);
+    find('[data-guide-back]').addEventListener('click',()=>{guideStep=Math.max(0,guideStep-1);paintGuide();find('[data-guide-title]').focus();});
+    find('[data-guide-next]').addEventListener('click',()=>{if(guideStep===3){closeGuide();report('教學已閱讀。接駁狀態仍會按實際連線及收發結果顯示。');}else{guideStep++;paintGuide();find('[data-guide-title]').focus();}});
+    find('[data-guide-refresh]').addEventListener('click',event=>run(event.currentTarget,async()=>{await refresh();report('已更新接駁狀態。');}));
+    find('[data-copy-web-url]').addEventListener('click',event=>run(event.currentTarget,async()=>{const field=find('[data-web-chat-url]');if(!field.value)throw new Error('請先準備網頁客服。');try{await navigator.clipboard.writeText(field.value);report('聊天網址已複製。');}catch{field.focus();field.select();report('請複製已選取的聊天網址。');}}));
+    all('[data-prepare-setup]').forEach(button=>button.addEventListener('click',event=>run(event.currentTarget,async()=>{
+      if(!live){report('設計預覽：正式工作台會先準備安裝任務，再讓你交給目前智能 Agent。');return;}
+      const flow=button.dataset.prepareSetup;
+      const instruction=flow==='whatsapp'?'請為 BlueSAI-客服的 WhatsApp 接駁整理可核對的安裝步驟草稿。列出如何核對目前客服執行器、現有主機和 Evolution 服務，說明所需安全設定及收件網址，讓我之後回到接駁教學取得二維碼並自行用手機掃碼。列明保留資料、金鑰安全入口、費用確認及測試號碼驗收步驟。這次只整理指引，不購買、部署、設定帳戶或向客戶發送。':'請為 BlueSAI-客服的網頁聊天整理可核對的安裝步驟草稿。說明如何沿用現有主機及同一客服核心，列出經用戶核准後啟用受限客人入口、取得 HTTPS 網址及加入網頁按鈕的步驟。列明會話隔離、草稿批准、客人收件及管理工作台讀回的驗收。這次只整理指引，不購買、部署或更改網站；本機網址不能當成公開入口。';
+      await refreshTasks();
+      let reusable=null;
+      for(const candidate of dotTasks.filter(task=>task.instruction===instruction&&!task.contextStale&&!['result_saved','cancelled'].includes(task.status))){const detail=(await backend.dotTask(candidate.id)).task;if(!taskClosed(detail)){reusable=detail;break;}}
+      if(reusable)selectedTask=reusable;
+      else{
+        if(setupTasks[flow]){try{if(taskClosed((await backend.dotTask(setupTasks[flow])).task))delete setupKeys[flow];}catch(error){if(error.status===404)delete setupKeys[flow];else throw error;}}
+        setupKeys[flow]||=crypto.randomUUID();selectedTask=(await backend.createDotTask({instruction,idempotencyKey:setupKeys[flow]})).task;
+        if(taskClosed(selectedTask)){setupKeys[flow]=crypto.randomUUID();selectedTask=(await backend.createDotTask({instruction,idempotencyKey:setupKeys[flow]})).task;}
+      }
+      setupTasks[flow]=selectedTask.id;
+      guideFlow=null;paintGuide();await refreshTasks();find('[data-dot-prompt-details]').open=true;find('[data-dot-task-detail]').scrollIntoView({block:'start'});report('安裝指引任務已準備。請檢查內容，再按「呼叫 Codex／DOT」，由目前智能 Agent 整理步驟草稿。');
+    })));
+    find('[data-whatsapp-form]').noValidate=true;
     if(live){find('.bp-preview-label').textContent='本機實測 · 與測試工作室分開';find('.bp-bottom-caption').textContent='設定及訓練記憶只儲存在本機；WhatsApp 對客發送未開啟。';find('.bp-workspace strong').textContent='本機工作台';find('.bp-avatar').textContent='本';all('[data-secret]').forEach(x=>{x.disabled=false;x.placeholder='在本機輸入，重啟服務後需重新填寫';});find('[data-model-submit]').textContent='測試並接駁 AI';find('[data-wa-submit]').textContent='取得二維碼';find('[data-key-help]').textContent='金鑰只暫存在本機服務記憶體，不寫入磁碟；重啟服務後需重新填寫。';}else{find('[data-model-form]').noValidate=true;find('[data-whatsapp-form]').noValidate=true;}
     if(live){report('設定及訓練記憶會儲存在這部電腦。');find('[data-screen="list"] .bp-note').textContent='由卡片進入「配置客服」，設定回覆方式、訓練記憶及接駁渠道。';find('[data-screen="list"] .bp-page-title p').textContent='在同一個工作台設定、訓練及接駁你的客服。';find('[data-screen="list"] .bp-actions').hidden=true;}
     try{await refresh(true);setupAgentBridge();}catch(e){report(e.message,true);}

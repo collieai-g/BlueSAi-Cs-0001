@@ -32,7 +32,7 @@ WhatsApp → Evolution → Bearer 驗證 → 事件去重／持久 jobs
 
 `src/store.js` 管理資料及同步交易；`agent.js` 處理提示詞和模型協定；`engine.js` 管理接收、工作、人工狀態和發送；`evolution.js` 管理供應商適配；`server.js` 管理認證、驗證與 HTTP；`index.js` 管理生命週期。
 
-## 介面（v0.2.0）
+## 介面（v0.3.0-preview.1）
 
 `public/index.html` 提供總覽、客戶對話、教客服、客服知識及設定五個視圖；主列與 Blueprint Studio 一樣是「總覽／工作／AI／資料」，設定在左下角。`public/app.js` 使用 hash 導覽與原有 HTTP API，仍為原生 JavaScript，沒有新增框架或建置步驟。
 
@@ -70,7 +70,7 @@ Evolution 自己的 webhook 重試並非持久傳送保證。本服務不能補�
 - 知識來源追蹤目前是 ID、配置 revision 及操作稽核，沒有不可變的全文版本庫。
 - 模型輸出有 schema 及來源檢查，但來源 ID 正確不保證每句話語意正確。開啟自動模式前須做商戶專屬評估；先審後發是預設。
 - 離線模式只用固定類別示範，不執行任意自訂指令；不假裝完整 AI。
-- 暫未收 `MESSAGES_UPDATE` 的完整渠道狀態、編輯／刪除事件、模板或回補對帳。`accepted` 不能當成 delivered。
+- 已收認證 `MESSAGES_UPDATE` 並持久、按 instance／地址／ID 配對送達回執。編輯／刪除、模板、LID 映射及主動查詢未知 send 結果仍未支援。`accepted` 不能當成 delivered。
 - 沒有外部人工通知、完整客服 SLA、帳戶密碼找回、角色權限或操作員分配。
 - 手動資料刪除已提供；保留期、資料匯出、合規告知和備份刪除需按正式業務補齊。
 
@@ -81,3 +81,11 @@ Evolution 接口設計依原始碼 `fa09d37892cdbb1d65a250155d293d92230c5b30`：
 自動測試涵蓋：空白事實、待審與過期資料、去重與重啟、接手競態、舊版本取消、保留期檢查、模型失敗、逾時不重發、24 小時窗口、短時間連續來訊、事件適配、錯誤形狀的 201、模型來源驗證、登入／CSRF／webhook 驗證。
 
 外部 AI、Evolution、WhatsApp、DNS／TLS、付費帳戶及生產備份未在本次本機測試中驗證。正式連接需以測試帳號完成這些步驟。
+
+## 0.3 接駁引導、客人入口及套件
+
+`index.js` 現在把 `createConnections` 與原有 Engine／Store 綁定，同一服務提供 `/workbench.html` 及 `/console`。接駁頁有 WhatsApp／網頁四步教學，缺少服務時只整理可核對的安裝指引草稿，不偽造二維碼或 connected。3101 仍保留原有隔離行為。
+
+`src/web-chat.js` 在明確開啟後提供獨立 guest cookie 及 token 雜湊會話，使用同一 Engine；只公開該會話的已提交內容，瀏覽器 ACK 才標送達。schema v3 保存 provider instance、回執 inbox 及觀察；v4 保存客人會話。現有設定、批准及人工接手保留。
+
+`src/install.js` 提供只讀 capability preflight 和倉庫外安裝 journal；`install-blueprint.js` 提供原生 authenticated-client 登記及同 ID 讀回。固定來源發佈、備份 coverage、CAS／重跑及不支援 Sites 的界線詳見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。

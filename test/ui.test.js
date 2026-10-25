@@ -30,7 +30,7 @@ test('all login shell assets load locally with correct MIME, without exposing pr
   for (const path of assets) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200, path);
-    const mime = path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript';
+    const mime = path.endsWith('.html') ? 'text/html' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : 'text/javascript';
     assert.ok(response.headers.get('content-type').startsWith(mime), path);
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.match(response.headers.get('content-security-policy'), /script-src 'self'; style-src 'self'/);
