@@ -12,7 +12,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
   let changing = false, webhookRegistered = false, webhookCheckedAt = null;
   let manualTestEnabled = false;
   let inboxReplyEnabled = false;
-  let inboxScope = { available:localWhatsAppTest, mode:'test',consented:false,replyToReceived:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],replyScope:'recent_incoming_only' };
+  let inboxScope = { available:localWhatsAppTest, mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],replyScope:'recent_incoming_only' };
   let testRecipients = { count: 0, maskedNumbers: [], deliveryEnabled: false, activationAvailable: false };
   if (localWhatsAppTest) {
     const target = waSecret && new URL(waSecret.url);
@@ -88,7 +88,9 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     if(!localWhatsAppTest)return {...inboxScope};
     const data=await request(instancePath('inboxScope'));
     if(!['test','all_private_text'].includes(data.mode)||typeof data.consented!=='boolean'||typeof data.replyToReceived!=='boolean')throw new ServiceError('收件範圍未能讀回核對，請更新本機接駁服務。',502);
-    inboxScope={...inboxScope,mode:data.mode,consented:data.consented,replyToReceived:data.replyToReceived};
+    const includeSelfTests=data.mode==='all_private_text'&&data.consented===true&&data.includeSelfTests===true;
+    inboxScope={...inboxScope,mode:data.mode,consented:data.consented,replyToReceived:data.replyToReceived,includeSelfTests,
+      supported:includeSelfTests?['new_private_text','self_test_text']:['new_private_text'],excluded:['history','groups','broadcasts',...(!includeSelfTests?['self_messages']:[]),'media']};
     if(inboxReplyEnabled && (data.mode!=='all_private_text'||!data.consented||!data.replyToReceived)){
       inboxReplyEnabled=false;
       engine.evolution=createEvolution({...providerConfig,deliveryEnabled:manualTestEnabled,fetchImpl});store.revise();
@@ -173,17 +175,18 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本機即時收件範圍設定。',409);
       manualTestEnabled=false;inboxReplyEnabled=false;
       engine.evolution=createEvolution({...providerConfig,deliveryEnabled:false,fetchImpl});store.revise();
-      if(!input||!['test','all_private_text'].includes(input.mode)||input.consent!==true||typeof input.replyToReceived!=='boolean'||(input.mode==='test'&&input.replyToReceived))throw new ServiceError('請確認收件範圍及是否允許回覆最近來訊客戶。');
+      const includeSelfTests=input?.includeSelfTests===true;
+      if(!input||!['test','all_private_text'].includes(input.mode)||input.consent!==true||typeof input.replyToReceived!=='boolean'||(input.includeSelfTests!==undefined&&typeof input.includeSelfTests!=='boolean')||(input.mode==='test'&&(input.replyToReceived||includeSelfTests)))throw new ServiceError('請確認收件範圍、最近來訊回覆及自身文字測試。');
       if((await request(instancePath('connectionState'))).instance?.state!=='open')throw new ServiceError('請先核對 WhatsApp 手機連線。',409);
       wa.status='open';wa.checkedAt=Date.now();
       if(!(await checkWebhook()).registered)throw new ServiceError('請先設定並核對收件網址。',409);
-      await request(instancePath('inboxScope'),{method:'PUT',data:{mode:input.mode,consent:true,replyToReceived:input.replyToReceived}});
+      await request(instancePath('inboxScope'),{method:'PUT',data:{mode:input.mode,consent:true,replyToReceived:input.replyToReceived,includeSelfTests}});
       const result=await refreshInboxScope();
-      if(result.mode!==input.mode||!result.consented||result.replyToReceived!==input.replyToReceived)throw new ServiceError('收件及回覆範圍讀回不相符，尚未開啟客服發送。',502);
+      if(result.mode!==input.mode||!result.consented||result.replyToReceived!==input.replyToReceived||result.includeSelfTests!==includeSelfTests)throw new ServiceError('收件、回覆或自身測試範圍讀回不相符，尚未開啟客服發送。',502);
       const provider=createEvolution({...providerConfig,deliveryEnabled:input.replyToReceived,fetchImpl});
-      store.transaction(()=>{store.revise();store.audit('whatsapp_inbox_scope_updated',input.mode);});
+      store.transaction(()=>{store.revise();store.audit('whatsapp_inbox_scope_updated',input.mode+(includeSelfTests?';self_test:on':''));});
       engine.evolution=provider;inboxReplyEnabled=input.replyToReceived;
-      return {...result,message:input.replyToReceived?'已接收新私人文字來訊，並允許回覆最近 24 小時實際傳訊過來的客戶。知識庫自動回覆仍依卡片開關及已確認答案。':'收件範圍已更新；發送保持關閉。'};
+      return {...result,message:(input.replyToReceived?'已接收新私人文字來訊，並允許回覆最近 24 小時實際傳訊過來的客戶。知識庫自動回覆仍依卡片開關及已確認答案。':'收件範圍已更新；發送保持關閉。')+(includeSelfTests?' 自己傳給自己的新文字會另列為只讀連線測試，不會自動回覆。':'')};
     }),
     configureTestRecipient: input => exclusive(async () => {
       if (!localWhatsAppTest || !runtime || !waSecret) throw new ServiceError('這個接駁服務未提供受限本機 WhatsApp 測試。',409);
@@ -215,6 +218,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       // Close the core sender before waiting on a slow or unavailable bridge.
       manualTestEnabled = false;
       inboxReplyEnabled = false;
+      inboxScope={...inboxScope,mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media']};
       if (runtime) { engine.evolution = createEvolution(); store.revise(); }
       if (localWhatsAppTest && waSecret) {
         try { await request(instancePath('inboxScope'),{method:'PUT',data:{mode:'test',replyToReceived:false,consent:true}}); } catch {}

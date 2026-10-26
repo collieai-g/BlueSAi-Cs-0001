@@ -1,6 +1,7 @@
 export function normalizeEvent(payload, instance, now = Date.now()) {
   if (payload?.instance !== instance) throw new Error('INSTANCE_MISMATCH');
   const event = String(payload.event || '').toLowerCase().replaceAll('_', '.');
+  if (payload.data?.localSelfTest === true && event !== 'messages.upsert') return { kind: 'ignore', reason: 'self_test_unsupported_event' };
   if (event === 'messages.set') return { kind: 'ignore', reason: 'history' };
   if (event === 'messages.update') {
     // Evolution emits provider acknowledgements with keyId, not its database id.
@@ -29,6 +30,14 @@ export function normalizeEvent(payload, instance, now = Date.now()) {
   const stale = !Number.isFinite(timestamp) || timestamp > now + 60000 || timestamp < now - 5 * 60000;
   const content = data.message?.conversation ?? data.message?.extendedTextMessage?.text;
   const unsupported = typeof content !== 'string' || !content.trim();
+  // Only the authenticated local bridge may authorize this marker at ingress.
+  // It is classified before outgoing echoes, irrespective of fromMe, and never
+  // enters the customer/receipt path or imports old/unsupported test content.
+  if (data.localSelfTest === true) {
+    if (stale || unsupported || content.length > 4000) return { kind: 'ignore', reason: 'invalid_self_test' };
+    return { kind: 'self_test', eventId: data.key.id, address, text: content,
+      timestamp: Math.min(timestamp, now), name: 'WhatsApp 自傳測試（只讀）' };
+  }
   return { kind: data.key.fromMe ? 'outgoing' : 'incoming', eventId: data.key.id, address,
     name: typeof data.pushName === 'string' ? data.pushName.slice(0,100) : 'WhatsApp 客戶',
     text: unsupported ? '［收到非文字訊息，請由人工查看 WhatsApp］' : content.slice(0,4000),

@@ -11,7 +11,7 @@ export function receiveDiagnostics(value) {
     scope: 'process', startedAt: stamp(value.startedAt),
     upserts: {...counts(value.upserts,['events','notify','append','other','requestId','messageCount']),lastAt:stamp(value.upserts?.lastAt)},
     rejected: counts(value.rejected,reasons),
-    queued: {...counts(value.queued,['incoming','outgoing','duplicate']),lastAt:stamp(value.queued?.lastAt)},
+    queued: {...counts(value.queued,['incoming','outgoing','selfTest','duplicate']),lastAt:stamp(value.queued?.lastAt)},
     callbacks: {...counts(value.callbacks,['success','failure']),lastSuccessAt:stamp(value.callbacks?.lastSuccessAt),lastFailureAt:stamp(value.callbacks?.lastFailureAt)},
     lastRejection: {reason:reasons.includes(value.lastRejection?.reason)?value.lastRejection.reason:null,at:stamp(value.lastRejection?.at)},
   };

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -542,4 +543,98 @@ test('same-account grant refresh preserves unsent deduplicated bodies, while a c
   f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('old-after-revoke',{messageTimestamp:originalSecond})]});
   await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
   assert.equal(forwarded,1);assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().inboxScope.mode,'all_private_text');
+});
+
+test('self-to-self text is an explicit read-only local test for either provider fromMe value, never a customer or send target',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();const path=`/instance/inboxScope/${instance}`;
+  const self=(id,fromMe)=>f.message(id,{key:{id,remoteJid:linkedNumber+'@s.whatsapp.net',fromMe}});
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  assert.equal(f.bridge.status().inboxScope.includeSelfTests,false);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[self('disabled-true',true),self('disabled-false',false)]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,0);
+  const enabled=await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,includeSelfTests:true,consent:true});
+  assert.equal(enabled.data.includeSelfTests,true);assert.equal(enabled.data.supported.includes('self_test_text'),true);assert.equal(enabled.data.excluded.includes('self_messages'),false);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[self('self-true',true),self('self-false',false),f.message('normal-customer-unchanged')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,3);
+  assert.equal(JSON.parse(f.callbacks[0].init.body).data.localSelfTest,true);assert.equal(JSON.parse(f.callbacks[1].init.body).data.localSelfTest,true);
+  assert.equal(JSON.parse(f.callbacks[2].init.body).data.localSelfTest,undefined);
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'),{readOnly:true});
+  assert.equal(db.prepare('SELECT count(*) AS n FROM observed_inbox_contacts WHERE address=?').get(linkedNumber+'@s.whatsapp.net').n,0);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM observed_inbox_contacts WHERE address=?').get(address).n,1);db.close();
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number:linkedNumber,text:'不可自動回覆自己',linkPreview:false})).status,403);
+  assert.equal(f.calls.length,0);const d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.queued.selfTest,2);assert.equal(d.queued.incoming,1);assert.equal(d.queued.outgoing,0);
+});
+
+test('self-test consent has its own seconds boundary and refresh preserves it without replaying a recovered duplicate',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();const path=`/instance/inboxScope/${instance}`;
+  const firstSecond=Math.floor(f.message().messageTimestamp);
+  const self=(id,second)=>f.message(id,{key:{id,remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true},messageTimestamp:second});
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});f.advance(3000);
+  await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[self('before-self-consent',firstSecond+1),self('same-self-second',firstSecond+3)]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  f.advance(3000);await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'synthetic-self-recovery',messages:[self('same-self-second',firstSecond+3),self('after-original-self-grant',firstSecond+4)]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,2);
+  assert.equal(f.bridge.status().receiveDiagnostics.queued.selfTest,2);assert.equal(f.bridge.status().receiveDiagnostics.queued.incoming,0);
+  assert.equal(f.bridge.status().receiveDiagnostics.queued.duplicate,1);assert.equal(f.calls.length,0);
+});
+
+test('self-test callbacks survive same-grant validation but are purged on revoke or failed grant while ordinary pending text remains scoped',async t=>{
+  let failing=true,forwarded=[];
+  const f=await fixture(t,{fetchImpl:async(url,init)=>{if(failing)throw Error('synthetic callback unavailable');forwarded.push(JSON.parse(init.body));return new Response('{}');}});
+  await f.connect();await f.register();const path=`/instance/inboxScope/${instance}`;
+  await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('pending-self',{key:{id:'pending-self',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true}}),f.message('pending-real-customer')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.bridge.status().webhook.pending,2);
+  await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});assert.equal(f.bridge.status().webhook.pending,2);
+  await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:false,consent:true});assert.equal(f.bridge.status().webhook.pending,1);
+  failing=false;f.advance(2000);await f.bridge.flush();assert.equal(forwarded.length,1);assert.equal(forwarded[0].data.localSelfTest,undefined);
+  await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('failed-grant-self',{key:{id:'failed-grant-self',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:false}})]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.bridge.status().webhook.pending,1);
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text',includeSelfTests:'yes',consent:true})).status,409);
+  assert.equal(f.bridge.status().inboxScope.includeSelfTests,false);assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.calls.length,0);
+});
+
+test('self-test consent is account-bound and survives only same-account reopen, while forged marker addresses never forward',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-wa-self-restart-'));
+  const first=await fixture(t,{dir,keep:true});let second;
+  t.after(async()=>{await first.bridge.close();await second?.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  await first.connect();await first.register();
+  await first.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  first.socket.ev.emit('messages.upsert',{type:'notify',messages:[first.message('self-before-restart',{key:{id:'self-before-restart',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true}})]});
+  await new Promise(resolve=>setImmediate(resolve));await first.bridge.close();
+  second=await fixture(t,{dir,keep:true});
+  assert.equal(second.bridge.status().inboxScope.includeSelfTests,true);
+  await second.bridge.flush();assert.equal(second.callbacks.length,0);assert.equal(second.bridge.status().webhook.pending,1);
+  await second.connect();await second.bridge.flush();assert.equal(second.callbacks.length,1);
+  assert.equal(JSON.parse(second.callbacks[0].init.body).data.localSelfTest,true);
+  const db=new DatabaseSync(join(dir,'bridge.sqlite'));
+  const forged={event:'messages.upsert',instance,sourceScope:'all_private_text',data:{key:{id:'forged-self-marker',remoteJid:address,fromMe:false},messageTimestamp:second.message().messageTimestamp,message:{conversation:'［合成測試］錯誤標記'},localSelfTest:true}};
+  db.prepare('INSERT INTO callback_outbox(id,event_key,payload,next_at,created_at) VALUES (?,?,?,?,?)').run('forged-self','self-test:forged-self',JSON.stringify(forged),0,0);db.close();
+  await second.bridge.flush();assert.equal(second.callbacks.length,1);assert.equal(second.bridge.status().webhook.pending,0);
+  second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('self-before-account-change',{key:{id:'self-before-account-change',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:false}})]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(second.bridge.status().webhook.pending,1);
+  second.socket.user.id='85255550888:1@s.whatsapp.net';
+  assert.equal(second.bridge.status().inboxScope.includeSelfTests,false);assert.equal(second.bridge.status().inboxScope.mode,'test');assert.equal(second.bridge.status().webhook.pending,0);
+  assert.equal(second.calls.length,0);
+});
+
+test('self-test own LID fallback requires one exact authenticated alias and never guesses unrelated or conflicting LIDs',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  f.socket.user.lid='333333333:1@lid';f.socket.signalRepository.lidMapping.getPNForLID=async()=>null;
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[
+    f.message('own-lid-self',{key:{id:'own-lid-self',remoteJid:'333333333:0@lid',fromMe:true}}),
+    f.message('unrelated-lid',{key:{id:'unrelated-lid',remoteJid:'999999999@lid',fromMe:false}}),
+  ]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  const actual=JSON.parse(f.callbacks[0].init.body);assert.equal(actual.data.localSelfTest,true);assert.equal(actual.data.key.remoteJid,linkedNumber+'@s.whatsapp.net');
+  f.socket.user={id:linkedAddress,lid:'444444444@lid'};
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('ambiguous-own-lid',{key:{id:'ambiguous-own-lid',remoteJid:'333333333@lid',fromMe:true}})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  assert.equal(f.bridge.status().receiveDiagnostics.rejected.unmapped,2);assert.equal(f.bridge.status().receiveDiagnostics.queued.selfTest,1);
+  assert.equal(f.bridge.status().receiveDiagnostics.queued.incoming,0);assert.equal(f.calls.length,0);
 });

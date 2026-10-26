@@ -30,6 +30,16 @@ SDK 亦使用 `@hosted`／`@hosted.lid` 私人地址；原始節點篩選只讓�
 
 只接收開啟後觀察到的新一對一純文字，最多 4000 字；不讀取歷史、群組、廣播、自己傳給自己的訊息、圖片、語音或其他媒體。若你在手機向最近已來訊的客戶人工回覆，該筆新文字會以 `outgoing` 交給核心接手，避免知識庫繼續搶答；已知機器發送 ID 的回聲不會誤觸人工接手，對未曾來訊對象發出的手機訊息不會轉送。電話身份只來自真正 PN／明確 `remoteJidAlt`，或 SDK 對該筆新事件 LID 的實際映射；不列舉通訊錄、不把 LID 數字當成電話。撤銷時清除依廣泛收件授權排隊的內文（包括手機人工回覆）；已開始傳送的 callback 無法保證收回。callback 每次最多處理 25 筆，避免爆量時每則多等待一秒。
 
+### 自己傳給自己的顯示測試
+
+上述排除自身訊息是預設值。本人亦可在已核對帳戶的廣泛收件範圍，明確提交 `{mode:"all_private_text",includeSelfTests:true,consent:true}`，開放自己傳給自己的新純文字作**唯讀顯示測試**。狀態會回報 `includeSelfTests:true`、支援 `self_test_text`，並暫時從排除項目移除 `self_messages`；未提供或設為 false 時關閉。
+
+此同意另有綁定同一帳戶的開始時間，不能借用較早的客戶收件同意匯入舊自身對話。自己帳戶的真正電話身份及新近時間均需核對；SDK 的 `fromMe:true` 或 `false` 形狀都可接收，但 callback 一律額外標示 `data.localSelfTest:true`，使用獨立 `self-test:<id>` 去重，不能冒充客戶來訊或手機人工接手。診斷另列 `queued.selfTest`，不計入真正客戶來訊或人工回覆數量。
+
+若自己的訊息只有 LID 而 SDK 尚未有 PN 映射，只能使用登入授權明確提供且沒有矛盾的唯一 own-LID，與同一已核對帳戶的 own-PN 作精確對應。這個備援只供已同意的自身顯示測試，不用於其他 LID、回執或一般客戶；資訊不足或互相矛盾便不轉送。
+
+這類訊息不寫入可回覆客戶名單，橋接亦會拒絕向已連結帳戶自身發送。開啟顯示測試不會啟用任何自動回覆。相同帳戶持續開啟及重啟可保留顯示同意與合法排隊內容；關閉、無效設定、撤銷或換帳戶會清除相關待轉送自身訊息，其他仍獲同意的客戶訊息依原收件範圍處理。真正的客戶雙向收發驗收仍需另一個帳戶。
+
 如要從卡片人工回覆或由已批准知識自動回覆，再獨立提交 `{mode:"all_private_text",replyToReceived:true,consent:true}`。此授權只准回覆**同一已連結帳戶曾實際觀察到、最近 24 小時內有新私人來訊的客戶**；不准主動傳給未曾來訊或自己的號碼。接收紀錄包含私人帳戶身份，換帳戶不沿用舊帳戶的收件證據。這個程序內發送授權在重啟、斷線、變更收件範圍或變更測試名單時關閉，不能單靠持久收件同意重新開啟。選擇「只開放指定測試號碼」會先撤銷廣泛收件、清除其排隊內文及關閉兩個發送閘門，再核對測試號碼；即使該次號碼或同意核對失敗，也不繼續保留廣泛收件。明確測試名單仍保留自己的獨立授權路線。
 
 收件箱回應的 `replyToReceived`／`deliveryEnabled` 只表示上述最近來訊回覆授權，`testMode.deliveryEnabled` 則只表示測試名單授權。兩者不能互相代替；客服核心仍須另有自己的發送閘門及版本／來源核對。實際送達／已讀回執按已知發送 ID 及電話配對，即使不在測試名單亦能核對已授權的收件箱回覆。
@@ -43,8 +53,8 @@ SDK 亦使用 `@hosted`／`@hosted.lid` 私人地址；原始節點篩選只讓�
 | `GET /healthz` | 不含身份資料的本機存活檢查 |
 | `GET /instance/connect/{instance}` | 啟動真正 socket，回傳目前 provider QR；未有 QR 就不生成假圖 |
 | `GET /instance/connectionState/{instance}` | 真實狀態、測試名單數量、遮罩末四碼、callback 排隊數 |
-| `GET /instance/inboxScope/{instance}` | 收件模式、支援／排除範圍、`replyToReceived` 及最近來訊回覆閘門；不返回電話或秘密 |
-| `PUT /instance/inboxScope/{instance}` | `{mode:"test"\|"all_private_text",consent:true,replyToReceived?:boolean}`；明確收件／回覆授權分開，每次變更先關閉發送 |
+| `GET /instance/inboxScope/{instance}` | 收件模式、支援／排除範圍、`includeSelfTests`、`replyToReceived` 及最近來訊回覆閘門；不返回電話或秘密 |
+| `PUT /instance/inboxScope/{instance}` | `{mode:"test"\|"all_private_text",consent:true,replyToReceived?:boolean,includeSelfTests?:boolean}`；收件、回覆及自身顯示測試分開同意，每次變更先關閉發送 |
 | `GET /instance/testRecipients/{instance}` | `{count,maskedNumbers,deliveryEnabled,activationAvailable,mappingState}` |
 | `PUT /instance/testRecipients/{instance}` | `{numbers:["含地區碼的數字"],consent:true,activateSending:true}`；先驗證整組前置條件才套用 |
 | `POST /webhook/set/{instance}` | 只接受私人環境預先指定的 loopback callback 及 secret，禁止任意轉送目的地 |

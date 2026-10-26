@@ -81,7 +81,7 @@ export class Engine {
       usable:Boolean(row.approved && (row.expires_at == null || row.expires_at > Date.now())) }));
   }
   answerFromKnowledge(c, message, forcedReason = '') {
-    if (!c || c.state !== 'ai') return;
+    if (!c || c.channel === 'whatsapp_self_test' || c.state !== 'ai') return;
     if (this.store.get("SELECT id FROM messages WHERE conversation_id=? AND version=? AND engine='knowledge' AND status<>'cancelled'", c.id, c.version)) return;
     const matches = this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
       WHERE r.normalized_question=? AND k.approved=1 AND (k.expires_at IS NULL OR k.expires_at>?)`, normalizeFaqQuestion(message.content), this.now());
@@ -145,7 +145,8 @@ export class Engine {
     });
   }
   takeover(id, state = 'human') {
-    this.requireConversation(id);
+    const conversation = this.requireConversation(id);
+    if (conversation.channel === 'whatsapp_self_test') throw new ServiceError('WhatsApp 自傳測試只供讀取，不提供接手、回覆或交回自動處理。',409);
     this.store.transaction(() => {
       this.invalidate(id);
       this.closeWindow(id, 'cancelled', state === 'ai' ? 'resume' : 'manual_takeover');
@@ -156,6 +157,7 @@ export class Engine {
     });
   }
   receive({ channel = 'demo', address = randomUUID(), name = '試聊客人', eventId = randomUUID(), text, timestamp = Date.now(), review = false }) {
+    if (channel === 'whatsapp_self_test') throw new ServiceError('自傳測試須使用獨立的只讀收件路線。',409);
     this.checkDeadlines();
     return this.store.transaction(() => {
       const receivedAt = this.now();
@@ -189,6 +191,29 @@ export class Engine {
       c = this.store.conversation(c.id);
       if (c.state === 'ai') this.store.run('INSERT INTO jobs VALUES (?,?,?,?,?)', id, c.id, c.version, 'pending', Date.now());
       return { conversationId: c.id, messageId: id, duplicate: false };
+    });
+  }
+  receiveSelfTest({address,eventId,text,timestamp}) {
+    if (typeof address !== 'string' || !/^[1-9]\d{7,14}@s\.whatsapp\.net$/.test(address) ||
+        typeof eventId !== 'string' || !eventId || eventId.length > 300 || typeof text !== 'string' || !text.trim() || text.length > 4000 ||
+        !Number.isFinite(timestamp) || timestamp < this.now()-300000 || timestamp > this.now()+60000) throw new ServiceError('自傳測試訊息無效。');
+    return this.store.transaction(()=>{
+      const key = `whatsapp_self_test:${this.evolution.instance || ''}:${address}:${eventId}`;
+      if (this.store.get('SELECT id FROM events WHERE id=?',key)) return {duplicate:true};
+      this.store.run('INSERT INTO events VALUES (?,?)',key,this.now());
+      let c = this.store.get("SELECT * FROM conversations WHERE channel='whatsapp_self_test' AND address=?",address);
+      if (!c) {
+        const id = randomUUID();
+        this.store.run('INSERT INTO conversations(id,channel,address,name,state,updated_at) VALUES (?,?,?,?,?,?)',
+          id,'whatsapp_self_test',address,'WhatsApp 自傳測試（只讀）','self_test',this.now());
+        c = this.store.conversation(id);
+      }
+      this.invalidate(c.id);
+      this.store.run("UPDATE conversations SET state='self_test',name='WhatsApp 自傳測試（只讀）' WHERE id=?",c.id);
+      const messageId=this.store.addMessage(c.id,'user',text,{status:'received',providerId:eventId,
+        providerInstance:this.evolution.instance || null,engine:'whatsapp-self-test',decision:'test_only'});
+      this.store.audit('whatsapp_self_test_received',c.id);
+      return {conversationId:c.id,messageId,duplicate:false,selfTest:true,customerAcceptance:false};
     });
   }
   outgoingEcho(event) {
@@ -234,7 +259,7 @@ export class Engine {
   async processJob(job) {
     this.checkDeadlines();
     const c = this.store.conversation(job.conversation_id);
-    if (!c || c.state !== 'ai' || c.version !== job.version) {
+    if (!c || c.channel === 'whatsapp_self_test' || c.state !== 'ai' || c.version !== job.version) {
       this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id); return;
     }
     if (this.inboxPolicy().enabled) {
@@ -302,6 +327,7 @@ export class Engine {
     const m = this.store.get('SELECT * FROM messages WHERE id=?', messageId);
     if (!m || m.status !== 'draft') throw new ServiceError('草稿已變更，請重新查看。', 409);
     const c = this.requireConversation(m.conversation_id);
+    if (c.channel === 'whatsapp_self_test') throw new ServiceError('WhatsApp 自傳測試只供讀取，不可批准發送。',409);
     if (m.version !== c.version || m.config_version !== this.store.value('revision')) throw new ServiceError('資料已更新，這份草稿不能再發送。', 409);
     if (c.state !== 'ai') throw new ServiceError('請在人工回覆欄確認內容並發送。', 409);
     if (c.channel === 'evolution' && !this.liveReady()) throw new ServiceError('尚未完成真實發送設定。', 409);
@@ -310,6 +336,7 @@ export class Engine {
   }
   manualReply(id, text) {
     const c = this.requireConversation(id);
+    if (c.channel === 'whatsapp_self_test') throw new ServiceError('WhatsApp 自傳測試只供讀取，不可發送回覆。',409);
     if (c.state !== 'human') throw new ServiceError('請先接手對話。', 409);
     if (c.channel === 'evolution' && !this.liveReady()) throw new ServiceError('尚未完成真實發送設定。', 409);
     return this.store.transaction(()=>{
@@ -325,6 +352,10 @@ export class Engine {
     m = this.store.get('SELECT * FROM messages WHERE id=?', m.id);
     if (!m || m.status !== 'queued') return;
     const c = this.store.conversation(m.conversation_id);
+    if (c?.channel === 'whatsapp_self_test') {
+      this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);
+      this.store.audit('whatsapp_self_test_send_blocked',m.id);return;
+    }
     const stateOkay = m.role === 'staff' ? c?.state === 'human' : c?.state === 'ai';
     const validFacts = new Set(this.store.facts().map(f => f.id));
     const expiredSource = m.role === 'assistant' && JSON.parse(m.sources).some(id => !validFacts.has(id));

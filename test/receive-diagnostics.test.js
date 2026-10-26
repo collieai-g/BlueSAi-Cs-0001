@@ -6,10 +6,11 @@ test('receive diagnostics expose only bounded counters, timestamps and fixed rea
   const now=Date.now(),privateValue='synthetic-private-body-or-credential';
   const result=receiveDiagnostics({scope:'process',startedAt:now,
     upserts:{events:2,notify:1,append:1,messageCount:2,lastAt:now,body:privateValue},
-    rejected:{nonText:1,unmapped:0,secret:privateValue},queued:{incoming:1,lastAt:now},
+    rejected:{nonText:1,unmapped:0,secret:privateValue},queued:{incoming:1,selfTest:2,lastAt:now},
     callbacks:{success:1,failure:0,lastSuccessAt:now,headers:privateValue},
     lastRejection:{reason:'nonText',at:now,text:privateValue},phone:privateValue,apiKey:privateValue});
   assert.equal(result.upserts.events,2);assert.equal(result.queued.incoming,1);
+  assert.equal(result.queued.selfTest,2);
   assert.equal(result.lastRejection.reason,'nonText');assert.equal(result.startedAt,now);
   assert.doesNotMatch(JSON.stringify(result),/synthetic-private|headers|phone|apiKey|body/);
   assert.equal(Object.keys(result.rejected).length,12);
