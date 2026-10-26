@@ -32,7 +32,7 @@ async function alive(pid) {
   // would test the CI container's init rather than this adapter's process group.
   if(process.platform==='linux'){
     try{const stat=await readFile(`/proc/${pid}/stat`,'utf8');if(/^\s*[ZX]\s/.test(stat.slice(stat.lastIndexOf(')')+1)))return false;}
-    catch(error){if(error.code==='ENOENT')return false;throw error;}
+    catch(error){if(error.code==='ENOENT'||error.code==='ESRCH')return false;throw error;}
   }
   return true;
 }
