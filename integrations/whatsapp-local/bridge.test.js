@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createLocalBridge, validateDataDirectory, validateNumbers, resolvePhoneAddress, resolveLinkedPhone } from './bridge.js';
-import { normalizeEvent } from '../../src/evolution.js';
+import { normalizeEvent, createEvolution } from '../../src/evolution.js';
 
 const key='synthetic-test-service-key-'.repeat(3),secret='synthetic-test-callback-secret-'.repeat(3),instance='test-local';
 const number='85255550123',address=number+'@s.whatsapp.net';
@@ -637,4 +637,186 @@ test('self-test own LID fallback requires one exact authenticated alias and neve
   await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
   assert.equal(f.bridge.status().receiveDiagnostics.rejected.unmapped,2);assert.equal(f.bridge.status().receiveDiagnostics.queued.selfTest,1);
   assert.equal(f.bridge.status().receiveDiagnostics.queued.incoming,0);assert.equal(f.calls.length,0);
+});
+
+const selfReplyPath=`/instance/selfTestReply/${instance}`,selfSendPath=`/message/sendSelfTest/${instance}`;
+const selfMessage=(f,id,fromMe=true,text='Hello')=>f.message(id,{key:{id,remoteJid:linkedNumber+'@s.whatsapp.net',fromMe},message:{conversation:text}});
+async function selfReplyReady(f,{automaticFaq=true}={}){
+  await f.connect();await f.register();
+  assert.equal((await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true})).status,200);
+  const grant=await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq,consent:true});assert.equal(grant.status,200);
+  return grant.data;
+}
+async function selfInput(f,id='self-input',fromMe=true){f.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(f,id,fromMe)]});await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();}
+const selfSend=(grant,replyToId='self-input',operationId='self-operation',text='［合成測試］歡迎留言。')=>({text,grantId:grant.grantId,replyToId,operationId,linkPreview:false});
+
+test('self replies default closed, require current account and explicit consent, and never widen ordinary sends',async t=>{
+  const f=await fixture(t);
+  assert.deepEqual((await f.api(selfReplyPath)).data,{enabled:false,automaticFaq:false,grantId:null,available:true,requiresNewMessage:true});
+  assert.equal((await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true})).status,409);
+  assert.equal((await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true},'wrong')).status,401);
+  const grant=await selfReplyReady(f);assert.equal(grant.enabled,true);assert.equal(grant.automaticFaq,true);
+  assert.doesNotMatch(JSON.stringify(grant),new RegExp(linkedNumber));
+  assert.equal(f.bridge.status().testMode.deliveryEnabled,false);assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number:linkedNumber,text:'不經這條路線',linkPreview:false})).status,403);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(grant,'not-observed'))).status,403);
+  await selfInput(f);
+  assert.equal((await f.api(selfSendPath,'POST',{...selfSend(grant),number})).status,400);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend({...grant,grantId:'wrong-grant'}))).status,403);
+  assert.equal(f.calls.length,0);
+  assert.equal((await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:false})).status,409);
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);
+});
+
+test('only a new self request carries reply authority and manual operation IDs are durable and idempotent',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  await selfInput(f,'old-readonly');assert.equal(normalizeEvent(JSON.parse(f.callbacks.at(-1).init.body),instance).replyGrantId,null);
+  const grant=(await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:false,consent:true})).data;
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(grant,'old-readonly'))).status,403);
+  await selfInput(f,'new-owned-input',false);
+  const normalized=normalizeEvent(JSON.parse(f.callbacks.at(-1).init.body),instance);assert.equal(normalized.replyGrantId,grant.grantId);
+  const body=selfSend(grant,'new-owned-input','manual-operation');
+  const sent=await f.api(selfSendPath,'POST',body);assert.equal(sent.status,201);assert.equal(sent.data.selfTest,true);
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].jid,linkedNumber+'@s.whatsapp.net');
+  const duplicate=await f.api(selfSendPath,'POST',body);assert.equal(duplicate.status,201);assert.equal(duplicate.data.duplicate,true);assert.equal(f.calls.length,1);
+  assert.equal((await f.api(selfSendPath,'POST',{...body,text:'另一份內容不可覆寫'})).status,409);assert.equal(f.calls.length,1);
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'),{readOnly:true});
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM self_test_inputs WHERE request_id=?').get('old-readonly').n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM self_test_inputs WHERE request_id=?').get('new-owned-input').n,1);
+  assert.equal(db.prepare('SELECT state FROM self_test_operations WHERE operation_id=?').get(body.operationId).state,'accepted');db.close();
+});
+
+test('one sourced FAQ-shaped self send is echoed neither as a new true/false input nor an external delivery receipt',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  const sent=await f.api(selfSendPath,'POST',selfSend(grant,'self-input','faq-operation','［合成FAQ］你好，歡迎查詢。'));
+  assert.equal(sent.status,201);assert.equal(f.calls.length,1);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(f,sent.data.key.id,true),selfMessage(f,sent.data.key.id,false)]});
+  f.socket.ev.emit('messages.update',[{key:{id:sent.data.key.id,remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true},update:{status:3}}]);
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  const upserts=f.callbacks.map(c=>JSON.parse(c.init.body)).filter(c=>c.event==='messages.upsert');assert.equal(upserts.length,1);
+  const receipt=f.callbacks.map(c=>JSON.parse(c.init.body)).find(c=>c.event==='messages.update');
+  assert.equal(receipt.data.localSelfReply,true);assert.equal(normalizeEvent(receipt,instance).receipts[0].selfTest,true);
+  assert.equal(f.bridge.status().receiveDiagnostics.rejected.knownEcho,2);
+  assert.equal(f.bridge.status().receiveDiagnostics.queued.incoming,0);
+});
+
+test('early provider aliases stay isolated and a failed regrant releases concurrent owner text only as read-only',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  let complete,preallocated;
+  f.socket.sendMessage=(jid,content,options)=>{f.calls.push({jid,content,opts:options});preallocated=options.messageId;return new Promise(resolve=>{complete=resolve;});};
+  const sending=f.api(selfSendPath,'POST',selfSend(grant));
+  while(!complete)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(f,'provider-alias',true),selfMessage(f,'provider-alias',false),selfMessage(f,preallocated,false),selfMessage(f,'concurrent-owner-input',false,'Hello')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  assert.equal((await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true})).status,409,'An unresolved send cannot be granted another identity');
+  // A failed reconfiguration closes the grant. New unrelated input must remain
+  // visible but read-only when the in-flight operation eventually finishes.
+  complete({key:{id:'provider-alias'}});assert.equal((await sending).status,201);
+  await f.bridge.flush();
+  const bodies=f.callbacks.map(c=>JSON.parse(c.init.body));
+  assert.equal(bodies.some(c=>c.data?.key?.id==='provider-alias'),false);
+  const concurrent=bodies.find(c=>c.data?.key?.id==='concurrent-owner-input');assert.equal(concurrent.data.selfReplyGrantId,null);
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'),{readOnly:true});assert.equal(db.prepare('SELECT send_id FROM local_send_aliases WHERE alias_id=?').get('provider-alias').send_id,preallocated);db.close();
+});
+
+test('an unknown self-send outcome closes reply authority and releases isolated echoes only as read-only, never retries',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  let rejectSend;
+  f.socket.sendMessage=(jid,content,options)=>{f.calls.push({jid,content,opts:options});return new Promise((resolve,reject)=>{rejectSend=reject;});};
+  const body=selfSend(grant),sending=f.api(selfSendPath,'POST',body);
+  while(!rejectSend)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(f,'uncertain-unknown-alias',false)]});await new Promise(resolve=>setImmediate(resolve));
+  rejectSend(Error('synthetic unknown outcome'));assert.equal((await sending).status,502);
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);await f.bridge.flush();
+  const echoed=f.callbacks.map(c=>JSON.parse(c.init.body)).find(c=>c.data?.key?.id==='uncertain-unknown-alias');assert.equal(echoed.data.selfReplyGrantId,null);
+  assert.equal((await f.api(selfSendPath,'POST',body)).status,403);assert.equal(f.calls.length,1);
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'),{readOnly:true});assert.equal(db.prepare('SELECT state FROM self_test_operations WHERE operation_id=?').get(body.operationId).state,'uncertain');db.close();
+});
+
+test('a successful alias send drops both early echo forms and releases genuine concurrent owner input under the same grant',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  let finish;
+  f.socket.sendMessage=(jid,content,options)=>{f.calls.push({jid,content,opts:options});return new Promise(resolve=>{finish=resolve;});};
+  const sending=f.api(selfSendPath,'POST',selfSend(grant));while(!finish)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(f,'healthy-alias',true),selfMessage(f,'healthy-alias',false),selfMessage(f,'healthy-concurrent-owner',false)]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  finish({key:{id:'healthy-alias'}});assert.equal((await sending).status,201);await f.bridge.flush();
+  const bodies=f.callbacks.map(c=>JSON.parse(c.init.body));assert.equal(bodies.some(c=>c.data.key?.id==='healthy-alias'),false);
+  assert.equal(bodies.find(c=>c.data.key?.id==='healthy-concurrent-owner').data.selfReplyGrantId,grant.grantId);
+  assert.equal((await f.api(selfReplyPath)).data.grantId,grant.grantId);assert.equal(f.calls.length,1);
+});
+
+test('a delayed self-grant PUT cannot resurrect authority after an explicit revoke',async t=>{
+  const f=await fixture(t);await selfReplyReady(f);
+  const held=httpRequest(f.base+selfReplyPath,{method:'PUT',headers:{apikey:key,'Content-Type':'application/json'}});
+  const response=new Promise((resolve,reject)=>{held.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});held.on('error',reject);});
+  held.write('{"enabled":');await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal((await f.api(selfReplyPath,'PUT',{enabled:false,automaticFaq:false,consent:true})).status,200);
+  held.end('true,"automaticFaq":true,"consent":true}');assert.equal(await response,409);
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);assert.equal(f.calls.length,0);
+});
+
+test('a late failure from a disconnected transport cannot revoke a newer process-local self grant',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  let rejectOld;
+  const oldSocket=f.socket;oldSocket.sendMessage=()=>new Promise((resolve,reject)=>{rejectOld=reject;});
+  const sending=f.api(selfSendPath,'POST',selfSend(grant));while(!rejectOld)await new Promise(resolve=>setImmediate(resolve));
+  oldSocket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);
+  const connecting=f.api(`/instance/connect/${instance}`);while(f.socket===oldSocket)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('connection.update',{connection:'open'});await connecting;
+  const next=(await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:false,consent:true})).data;assert.equal(next.enabled,true);assert.notEqual(next.grantId,grant.grantId);
+  rejectOld(Error('synthetic late transport failure'));assert.equal((await sending).status,502);
+  assert.equal((await f.api(selfReplyPath)).data.grantId,next.grantId);
+});
+
+test('self grants close on scope change, disconnect and account changes; new grants cannot authorize old inputs',async t=>{
+  const f=await fixture(t);let grant=await selfReplyReady(f);await selfInput(f);
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',includeSelfTests:true,consent:true});
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(grant))).status,403);
+  const next=(await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true})).data;assert.notEqual(next.grantId,grant.grantId);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(next))).status,403);
+  f.socket.user.id='85255550999:1@s.whatsapp.net';assert.equal((await f.api(selfReplyPath)).data.enabled,false);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(next))).status,403);assert.equal(f.calls.length,0);
+});
+
+test('self-send IDs survive restart but grants and old request authority never do',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-self-reply-restart-'));
+  const first=await fixture(t,{dir,keep:true});let second;
+  t.after(async()=>{await first.bridge.close();await second?.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  const grant=await selfReplyReady(first);await selfInput(first);
+  const sent=await first.api(selfSendPath,'POST',selfSend(grant));assert.equal(sent.status,201);await first.bridge.close();
+  second=await fixture(t,{dir,keep:true});await second.connect();await second.register();
+  assert.equal((await second.api(selfReplyPath)).data.enabled,false);
+  assert.equal((await second.api(selfSendPath,'POST',selfSend(grant))).status,403);
+  const next=(await second.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true})).data;assert.notEqual(next.grantId,grant.grantId);
+  second.socket.ev.emit('messages.upsert',{type:'notify',messages:[selfMessage(second,sent.data.key.id,true),selfMessage(second,sent.data.key.id,false),selfMessage(second,'self-input',false)]});
+  await new Promise(resolve=>setImmediate(resolve));await second.bridge.flush();assert.equal(second.callbacks.length,0);assert.equal(second.calls.length,0);
+  assert.equal((await second.api(selfSendPath,'POST',selfSend(next))).status,403);
+});
+
+test('self sending has a separate five-per-minute ceiling and does not auto-retry rate-limited operations',async t=>{
+  const f=await fixture(t),grant=await selfReplyReady(f);await selfInput(f);
+  for(let i=0;i<5;i++)assert.equal((await f.api(selfSendPath,'POST',selfSend(grant,'self-input','rate-'+i))).status,201);
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(grant,'self-input','rate-six'))).status,429);assert.equal(f.calls.length,5);
+  assert.equal((await f.api(selfReplyPath)).data.enabled,false);
+  f.advance(60000);const next=(await f.api(selfReplyPath,'PUT',{enabled:true,automaticFaq:true,consent:true})).data;await selfInput(f,'new-rate-input');
+  assert.equal((await f.api(selfSendPath,'POST',selfSend(next,'new-rate-input','rate-six'))).status,201);assert.equal(f.calls.length,6);
+});
+
+test('self provider transport is explicit, contains no recipient, and normalizes grant and receipt markers strictly',async()=>{
+  const calls=[];const provider=createEvolution({url:'http://127.0.0.1:3199',instance:'self fixture',apiKey:'synthetic-only',deliveryEnabled:false,fetchImpl:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({key:{id:'self-provider-id'},status:'accepted',selfTest:true}));}});
+  const input={text:'［合成測試］本人手動回覆。',grantId:'synthetic-grant',replyToId:'synthetic-input',operationId:'synthetic-operation'};
+  assert.deepEqual(await provider.sendSelfTest(input),{providerId:'self-provider-id',selfTest:true,duplicate:false});
+  assert.match(calls[0].url,/\/message\/sendSelfTest\/self%20fixture$/);assert.equal(calls[0].options.redirect,'error');assert.equal(calls[0].options.headers.apikey,'synthetic-only');
+  assert.deepEqual(JSON.parse(calls[0].options.body),{...input,linkPreview:false});assert.ok(calls[0].options.signal instanceof AbortSignal);
+  await assert.rejects(provider.sendSelfTest({...input,number}),/SELF_TEST_INPUT_INVALID/);assert.equal(calls.length,1);
+  await assert.rejects(provider.send(address,'普通發送仍關閉'),/DELIVERY_DISABLED/);
+  const base={event:'messages.upsert',instance,data:{key:{id:'synthetic-self-event',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:false},messageTimestamp:Date.now()/1000,message:{conversation:'Hello'},localSelfTest:true,selfReplyGrantId:'synthetic-grant'}};
+  assert.equal(normalizeEvent(base,instance).replyGrantId,'synthetic-grant');
+  assert.equal(normalizeEvent({...base,data:{...base.data,selfReplyGrantId:{bad:true}}},instance).kind,'ignore');
+  const receipt={event:'messages.update',instance,data:{keyId:'self-provider-id',remoteJid:linkedNumber+'@s.whatsapp.net',fromMe:true,status:'DELIVERY_ACK',localSelfReply:true}};
+  assert.equal(normalizeEvent(receipt,instance).receipts[0].selfTest,true);
 });

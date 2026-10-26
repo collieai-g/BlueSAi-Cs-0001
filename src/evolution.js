@@ -13,9 +13,10 @@ export function normalizeEvent(payload, instance, now = Date.now()) {
       if (!data || typeof data !== 'object') throw new Error('INVALID_RECEIPT');
       const providerId = data.keyId, address = data.remoteJid;
       if (typeof providerId !== 'string' || !providerId || providerId.length > 300 || typeof address !== 'string') throw new Error('INVALID_RECEIPT');
+      if(data.localSelfReply!==undefined&&typeof data.localSelfReply!=='boolean')throw new Error('INVALID_RECEIPT');
       if (data.fromMe !== true || !/^\d{5,20}@s\.whatsapp\.net$/.test(address)) continue;
       const status = states[data.status];
-      if (status) receipts.push({ instance, providerId, address, status });
+      if (status) receipts.push({ instance, providerId, address, status,...(data.localSelfReply===true?{selfTest:true}:{}) });
     }
     return { kind: 'receipt', receipts };
   }
@@ -34,9 +35,10 @@ export function normalizeEvent(payload, instance, now = Date.now()) {
   // It is classified before outgoing echoes, irrespective of fromMe, and never
   // enters the customer/receipt path or imports old/unsupported test content.
   if (data.localSelfTest === true) {
-    if (stale || unsupported || content.length > 4000) return { kind: 'ignore', reason: 'invalid_self_test' };
+    const replyGrantId=data.selfReplyGrantId??null;
+    if (stale || unsupported || content.length > 4000 || (replyGrantId!==null&&(typeof replyGrantId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(replyGrantId)))) return { kind: 'ignore', reason: 'invalid_self_test' };
     return { kind: 'self_test', eventId: data.key.id, address, text: content,
-      timestamp: Math.min(timestamp, now), name: 'WhatsApp 自傳測試（只讀）' };
+      timestamp: Math.min(timestamp, now), name:replyGrantId?'WhatsApp 本人回覆測試':'WhatsApp 自傳測試（只讀）',replyGrantId };
   }
   return { kind: data.key.fromMe ? 'outgoing' : 'incoming', eventId: data.key.id, address,
     name: typeof data.pushName === 'string' ? data.pushName.slice(0,100) : 'WhatsApp 客戶',
@@ -55,6 +57,18 @@ export function createEvolution({ url = '', instance = '', apiKey = '', delivery
   const configured = Boolean(url && instance && apiKey);
   return {
     configured, deliveryEnabled, instance,
+    async sendSelfTest(input) {
+      if(!configured)throw new Error('SELF_TEST_NOT_CONFIGURED');
+      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['text','grantId','replyToId','operationId','linkPreview'].includes(key))||typeof input.text!=='string'||!input.text.trim()||input.text.length>4000||typeof input.grantId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(input.grantId)||typeof input.replyToId!=='string'||!input.replyToId||input.replyToId.length>300||typeof input.operationId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(input.operationId)||(input.linkPreview!==undefined&&input.linkPreview!==false))throw new Error('SELF_TEST_INPUT_INVALID');
+      const response=await fetchImpl(`${url.replace(/\/$/,'')}/message/sendSelfTest/${encodeURIComponent(instance)}`,{
+        method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{apikey:apiKey,'Content-Type':'application/json'},
+        body:JSON.stringify({text:input.text,grantId:input.grantId,replyToId:input.replyToId,operationId:input.operationId,linkPreview:false}),
+      });
+      if(!response.ok)throw new Error(`SELF_TEST_PROVIDER_HTTP_${response.status}`);
+      const data=await response.json(),id=data?.key?.id;
+      if(data.error||data.status==='error'||data.selfTest!==true||typeof id!=='string'||!id||id.length>300)throw new Error('SELF_TEST_RESULT_UNKNOWN');
+      return {providerId:id,selfTest:true,duplicate:data.duplicate===true};
+    },
     async send(address, text) {
       if (!deliveryEnabled || !configured) throw new Error('DELIVERY_DISABLED');
       const response = await fetchImpl(`${url.replace(/\/$/,'')}/message/sendText/${encodeURIComponent(instance)}`, {

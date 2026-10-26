@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { validateReply } from './agent.js';
 
 export class ServiceError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -16,6 +17,10 @@ export class Engine {
     this.store = store; this.agent = agent; this.evolution = evolution;
     this.now = now; this.responseTimeoutMs = responseTimeoutMs; this.deadlinePollMs = deadlinePollMs;
     this.running = false; this.dispatching = false; this.stopping = false; this.webChatEnabled = false;
+    this.generation = null;
+    this.selfReply = { available:false,enabled:false,automaticFaq:false,grantId:null,requiresNewMessage:true };
+    this.selfReplySender = null;
+    this.watchStore();
     store.recover();
     for (const m of store.all("SELECT id FROM messages WHERE provider_id IS NOT NULL AND provider_instance IS NOT NULL AND role IN ('assistant','staff')")) this.reconcileReceipts(m.id);
     this.checkDeadlines();
@@ -25,7 +30,137 @@ export class Engine {
     if (!c) throw new ServiceError('找不到對話。', 404);
     return c;
   }
-  inboxPolicy() { return this.store.value('inbox_policy'); }
+  setSelfTestReplyScope(scope,send) {
+    if(!scope||typeof scope.enabled!=='boolean'||typeof scope.automaticFaq!=='boolean'||
+      (scope.enabled&&(typeof scope.grantId!=='string'||!/^[\w-]{16,100}$/.test(scope.grantId)||typeof send!=='function')))throw new ServiceError('本人對話測試授權未能核對。',502);
+    const next={available:scope.available===true,enabled:scope.enabled,automaticFaq:scope.enabled&&scope.automaticFaq,
+      grantId:scope.enabled?scope.grantId:null,requiresNewMessage:true};
+    const changed=JSON.stringify(next)!==JSON.stringify(this.selfReply);
+    try{
+      if(changed)this.store.transaction(()=>{
+        for(const c of this.store.all("SELECT id FROM conversations WHERE channel='whatsapp_self_test'")){
+          this.invalidate(c.id);this.store.run("UPDATE conversations SET state='self_test',name='WhatsApp 本人對話測試' WHERE id=?",c.id);
+        }
+        this.store.audit('self_test_reply_scope_changed',scope.enabled?'enabled':'disabled');
+      });
+    }catch(error){
+      if(!next.enabled){this.selfReply=next;this.selfReplySender=null;}
+      throw error;
+    }
+    this.selfReply=next;this.selfReplySender=scope.enabled?send:null;
+    return {...this.selfReply};
+  }
+  selfTestReplyStatus(c) {
+    const scope=this.selfReply;
+    if(!c||c.channel!=='whatsapp_self_test')return {...scope,eligible:false};
+    const input=this.store.get(`SELECT m.id,m.provider_id,s.grant_id FROM messages m LEFT JOIN self_test_reply_links s ON s.message_id=m.id
+      WHERE m.conversation_id=? AND m.role='user' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1`,c.id);
+    const eligible=Boolean(scope.enabled&&input?.provider_id&&input.grant_id===scope.grantId&&
+      this.now()>=c.last_customer_at&&this.now()-c.last_customer_at<86400000);
+    return {...scope,eligible};
+  }
+  answerSelfTest(c,inputId) {
+    const scope=this.selfTestReplyStatus(c),policy=this.inboxPolicy();
+    if(!scope.eligible||c.state!=='self_auto'||!scope.automaticFaq||!policy.enabled||!policy.automaticKnowledge)return;
+    const input=this.store.get('SELECT * FROM messages WHERE id=?',inputId);
+    if(!input||/退款|退貨|refund|例外|exception|真人|人工|投訴/iu.test(input.content))return;
+    const matches=this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
+      WHERE r.normalized_question=? AND k.approved=1 AND (k.expires_at IS NULL OR k.expires_at>?)`,normalizeFaqQuestion(input.content),this.now());
+    if(matches.length!==1||['refund','style','procedure'].includes(matches[0].category)||
+      this.store.get("SELECT message_id FROM self_test_reply_links WHERE input_message_id=? AND grant_id=? AND kind='faq'",input.id,scope.grantId))return;
+    const messageId=this.store.addMessage(c.id,'assistant',matches[0].content,{status:'queued',sources:[matches[0].id],decision:'answer',engine:'self-test-knowledge'});
+    this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,input.id,scope.grantId,input.provider_id,'faq','self-faq-'+input.id);
+    this.store.audit('self_test_faq_queued',messageId);
+  }
+  manualSelfTestReply(id,input) {
+    const c=this.requireConversation(id),text=typeof input?.text==='string'?input.text.trim():'';
+    if(c.channel!=='whatsapp_self_test'||!text||text.length>1500||typeof input.operationId!=='string'||!/^[\w-]{8,100}$/.test(input.operationId)||!Number.isSafeInteger(input.expectedVersion))throw new ServiceError('請核對本人測試對話、版本及回覆內容。');
+    const previous=this.store.get(`SELECT m.id,m.conversation_id,m.content,m.status FROM self_test_reply_links s JOIN messages m ON m.id=s.message_id WHERE s.operation_id=?`,input.operationId);
+    if(previous){if(previous.conversation_id!==id||previous.content!==text)throw new ServiceError('同一測試操作不能改為另一段回覆。',409);return {messageId:previous.id,operationId:input.operationId,status:previous.status,selfTest:true,sent:['accepted','delivered','read'].includes(previous.status)};}
+    const scope=this.selfTestReplyStatus(c);
+    if(!scope.eligible)throw new ServiceError('請先開啟本人對話回覆測試，再從手機傳一則新文字。',409);
+    if(c.version!==input.expectedVersion)throw new ServiceError('本人對話已更新，請先讀取最新訊息再發送。',409);
+    const last=this.store.get("SELECT * FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1",id);
+    if(this.store.get("SELECT COUNT(*) n FROM messages WHERE conversation_id=? AND role='staff' AND created_at>?",id,Date.now()-60000).n>=5)throw new ServiceError('本人測試回覆太頻密，請稍後再試。',429);
+    return this.store.transaction(()=>{
+      this.invalidate(id);this.store.run("UPDATE conversations SET state='self_human' WHERE id=?",id);
+      const messageId=this.store.addMessage(id,'staff',text,{status:'queued',engine:'self-test-manual',decision:'test_reply'});
+      this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,last.id,scope.grantId,last.provider_id,'manual',input.operationId);
+      this.store.audit('self_test_manual_queued',messageId);
+      return {messageId,operationId:input.operationId,status:'queued',selfTest:true,sent:false};
+    });
+  }
+  async dispatchSelfTest(m,c) {
+    const link=this.store.get('SELECT * FROM self_test_reply_links WHERE message_id=?',m.id),scope=this.selfTestReplyStatus(c);
+    const facts=new Map(this.store.facts(this.now()).map(f=>[f.id,f]));
+    const sources=JSON.parse(m.sources),policy=this.inboxPolicy();
+    const sourceOkay=m.role==='staff'||(sources.length>0&&sources.every(id=>facts.has(id)&&!['refund','style','procedure'].includes(facts.get(id).category)));
+    const stateOkay=m.role==='staff'?c.state==='self_human':c.state==='self_auto'&&scope.automaticFaq&&policy.enabled&&policy.automaticKnowledge;
+    if(!scope.eligible||!link||link.grant_id!==scope.grantId||!stateOkay||!sourceOkay||m.version!==c.version||m.config_version!==this.store.value('revision')||!this.selfReplySender){
+      this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);return;
+    }
+    this.store.run("UPDATE messages SET status='sending' WHERE id=? AND status='queued'",m.id);
+    try{
+      const result=await this.selfReplySender({text:m.content,grantId:scope.grantId,replyToId:link.request_provider_id,operationId:link.operation_id,linkPreview:false});
+      if(typeof result?.providerId!=='string'||!result.providerId)throw new Error('SELF_REPLY_RESULT_UNKNOWN');
+      this.store.run("UPDATE messages SET status='accepted',provider_id=?,provider_instance=? WHERE id=?",result.providerId,this.evolution.instance,m.id);
+      this.reconcileReceipts(m.id);this.store.audit('self_test_reply_accepted',m.id);
+    }catch{
+      this.store.run("UPDATE messages SET status='uncertain' WHERE id=?",m.id);this.store.audit('self_test_reply_uncertain',m.id);
+      if(this.selfReply.grantId===scope.grantId)this.setSelfTestReplyScope({available:scope.available,enabled:false,automaticFaq:false});
+    }
+  }
+  get agent() { return this._agent; }
+  set agent(next) {
+    if (this._agent && this._agent !== next) this.cancelGeneration('provider_changed');
+    this._agent = next;
+  }
+  watchStore() {
+    if (this.unsubscribeStore) return;
+    this.unsubscribeStore = this.store.subscribe(() => {
+      const active = this.generation;
+      if (!active) return;
+      if (active.agent !== this.agent) this.cancelGeneration('provider_changed');
+      else if (active.revision !== this.store.value('revision')) this.cancelGeneration('revision_changed');
+    });
+  }
+  cancelGeneration(reason, conversationId) {
+    const active = this.generation;
+    if (active && (!conversationId || active.conversationId === conversationId) && !active.controller.signal.aborted) active.controller.abort(reason);
+  }
+  // A provider or policy change applies to future input, never resubmits an old
+  // customer request under newly granted automation permissions.
+  retirePending(reason) {
+    const unanswered = this.store.all(`SELECT DISTINCT c.id FROM conversations c WHERE c.state='ai'
+      AND (EXISTS(SELECT 1 FROM jobs j WHERE j.conversation_id=c.id AND j.state IN ('pending','running'))
+        OR EXISTS(SELECT 1 FROM response_windows w WHERE w.conversation_id=c.id AND w.status='pending'))`);
+    for (const row of unanswered) {
+      if (!this.pendingWindow(row.id)) {
+        const message = this.store.get("SELECT id FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1", row.id);
+        if (message) this.openWindow(row.id, message.id, this.now());
+      }
+      const window = this.pendingWindow(row.id);
+      if (window) this.handoffWindow(window, reason);
+    }
+    this.store.run("UPDATE jobs SET state='done' WHERE state IN ('pending','running')");
+  }
+  replaceAgent(candidate, selection = {provider:candidate.configured ? (candidate.provider||'openai') : 'none',model:candidate.model||''}) {
+    const previous = this.agent;
+    this.cancelGeneration('provider_changed');
+    this.store.transaction(() => {
+      this.store.revise();
+      this.retirePending('provider_changed');
+      this.store.set('reply_provider',selection);
+      this.store.audit('reply_provider_changed');
+    });
+    this.agent = candidate;
+    return previous;
+  }
+  inboxPolicy() {
+    const policy = this.store.value('inbox_policy');
+    return { enabled: policy.enabled === true, automaticKnowledge: policy.automaticKnowledge === true,
+      aiFallback: policy.aiFallback === true, automaticAi: policy.automaticAi === true };
+  }
   inboxStatus() {
     const pending = this.store.all(`SELECT h.id,h.conversation_id,h.reason,h.created_at FROM handoff_tasks h
       JOIN conversations c ON c.id=h.conversation_id
@@ -34,27 +169,22 @@ export class Engine {
       ORDER BY h.created_at DESC LIMIT 200`).map(row=>({id:row.id,conversationId:row.conversation_id,reason:row.reason,createdAt:row.created_at}));
     const pendingCount = this.store.get(`SELECT COUNT(DISTINCT h.conversation_id) AS n FROM handoff_tasks h
       JOIN conversations c ON c.id=h.conversation_id WHERE h.status='pending' AND c.state IN ('waiting','human')`).n;
-    return { policy: this.inboxPolicy(), pendingCount, pending, hasMore: pendingCount > pending.length,
+    return { policy: this.inboxPolicy(), selfTestReply:{...this.selfReply}, pendingCount, pending, hasMore: pendingCount > pending.length,
       notification: { scope: 'local_card', externalNotified: false } };
   }
   configureInbox(input) {
-    if (!input || typeof input.enabled !== 'boolean' || typeof input.automaticKnowledge !== 'boolean') throw new ServiceError('請確認收件箱及知識庫自動回覆設定。');
+    if (!input || typeof input.enabled !== 'boolean' || typeof input.automaticKnowledge !== 'boolean' ||
+      ['aiFallback','automaticAi'].some(key => input[key] !== undefined && typeof input[key] !== 'boolean')) throw new ServiceError('請確認收件箱、知識庫及 AI 自動回覆設定。');
     return this.store.transaction(()=>{
       const previous = this.inboxPolicy();
-      const next = { enabled: input.enabled, automaticKnowledge: input.automaticKnowledge };
+      const next = { enabled: input.enabled, automaticKnowledge: input.automaticKnowledge,
+        aiFallback: input.aiFallback ?? previous.aiFallback, automaticAi: input.automaticAi ?? previous.automaticAi };
+      if ((next.aiFallback && !next.enabled) || (next.automaticAi && !next.aiFallback)) throw new ServiceError('請先啟用知識庫優先及 AI 後備，再選擇 AI 自動發送。');
+      if ((next.aiFallback || next.automaticAi) && !this.agent.configured) throw new ServiceError('請先接駁並核對可用的 AI，再啟用 AI 後備。',409);
       if (JSON.stringify(previous) === JSON.stringify(next)) return this.inboxStatus();
-      const unanswered = next.enabled ? this.store.all(`SELECT DISTINCT c.id FROM conversations c
-        WHERE c.state='ai' AND (EXISTS(SELECT 1 FROM jobs j WHERE j.conversation_id=c.id AND j.state IN ('pending','running'))
-          OR EXISTS(SELECT 1 FROM response_windows w WHERE w.conversation_id=c.id AND w.status='pending'))`) : [];
+      this.cancelGeneration('policy_changed');
       this.store.set('inbox_policy', next); this.store.revise();
-      if (next.enabled) {
-        this.store.run("UPDATE jobs SET state='done' WHERE state IN ('pending','running')");
-        for (const row of unanswered) {
-          this.closeWindow(row.id, 'cancelled', 'knowledge_mode_enabled');
-          const message = this.store.get("SELECT * FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1", row.id);
-          if (message) this.answerFromKnowledge(this.store.conversation(row.id), message);
-        }
-      }
+      this.retirePending('reply_policy_changed');
       this.store.audit('inbox_policy_changed');
       return this.inboxStatus();
     });
@@ -70,7 +200,7 @@ export class Engine {
       const category = /退款|退貨|refund/iu.test(question) ? 'refund' : 'general';
       this.store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)', knowledgeId, question.slice(0,100), category, answer, input.approved ? 1 : 0, null, now);
       this.store.run('INSERT INTO faq_rules VALUES (?,?,?,?,?)', id, knowledgeId, question, normalized, now);
-      this.store.revise(); this.store.audit(input.approved ? 'faq_approved' : 'faq_proposed', id);
+      if(input.approved)this.store.revise(); this.store.audit(input.approved ? 'faq_approved' : 'faq_proposed', id);
       return { id, knowledgeId, question, answer, approved: input.approved };
     });
   }
@@ -80,7 +210,7 @@ export class Engine {
       id:row.id,knowledgeId:row.knowledge_id,question:row.question,answer:row.content,approved:Boolean(row.approved),expiresAt:row.expires_at,
       usable:Boolean(row.approved && (row.expires_at == null || row.expires_at > Date.now())) }));
   }
-  answerFromKnowledge(c, message, forcedReason = '') {
+  answerFromKnowledge(c, message, forcedReason = '', { scheduleAi = true } = {}) {
     if (!c || c.channel === 'whatsapp_self_test' || c.state !== 'ai') return;
     if (this.store.get("SELECT id FROM messages WHERE conversation_id=? AND version=? AND engine='knowledge' AND status<>'cancelled'", c.id, c.version)) return;
     const matches = this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
@@ -88,6 +218,12 @@ export class Engine {
     let reason = forcedReason;
     if (!reason && (/退款|退貨|refund|例外|exception/iu.test(message.content) || matches.some(row=>row.category==='refund'))) reason = 'knowledge_requires_human';
     if (!reason && matches.length !== 1) reason = matches.length ? 'knowledge_conflict' : 'knowledge_missing';
+    if (!reason && matches.some(row=>['style','procedure'].includes(row.category))) reason = 'knowledge_missing';
+    if (reason === 'knowledge_missing' && this.inboxPolicy().aiFallback && this.agent.configured) {
+      this.openWindow(c.id, message.id, this.now());
+      if (scheduleAi) this.store.run('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?)', message.id, c.id, c.version, 'pending', Date.now());
+      return 'ai';
+    }
     if (reason) {
       this.openWindow(c.id, message.id, this.now());
       const window = this.pendingWindow(c.id);
@@ -102,6 +238,7 @@ export class Engine {
     this.store.audit(automatic ? 'knowledge_reply_queued' : 'knowledge_reply_drafted', c.id);
   }
   invalidate(id) {
+    this.cancelGeneration('conversation_changed', id);
     this.store.run('UPDATE conversations SET version=version+1, updated_at=? WHERE id=?', Date.now(), id);
     this.store.run("UPDATE messages SET status='cancelled' WHERE conversation_id=? AND status IN ('draft','queued')", id);
   }
@@ -146,7 +283,10 @@ export class Engine {
   }
   takeover(id, state = 'human') {
     const conversation = this.requireConversation(id);
-    if (conversation.channel === 'whatsapp_self_test') throw new ServiceError('WhatsApp 自傳測試只供讀取，不提供接手、回覆或交回自動處理。',409);
+    if (conversation.channel === 'whatsapp_self_test') {
+      if(!this.selfTestReplyStatus(conversation).eligible)throw new ServiceError('請先開啟本人對話回覆測試，並從手機傳一則新文字。',409);
+      return this.store.transaction(()=>{this.invalidate(id);this.store.run('UPDATE conversations SET state=? WHERE id=?',state==='ai'?'self_auto':'self_human',id);this.store.audit('self_test_control_changed',id);});
+    }
     this.store.transaction(() => {
       this.invalidate(id);
       this.closeWindow(id, 'cancelled', state === 'ai' ? 'resume' : 'manual_takeover');
@@ -181,6 +321,13 @@ export class Engine {
         this.answerFromKnowledge(current, this.store.get('SELECT * FROM messages WHERE id=?', id), reason);
         return { conversationId: c.id, messageId: id, duplicate: false };
       }
+      if (this.agent.provider === 'codex-cli') {
+        if (c.state === 'ai') {
+          this.openWindow(c.id,id,receivedAt);
+          this.handoffWindow(this.pendingWindow(c.id),'ai_fallback_disabled',receivedAt);
+        }
+        return {conversationId:c.id,messageId:id,duplicate:false};
+      }
       if (c.state === 'ai') this.openWindow(c.id, id, receivedAt);
       if (review || /真人|人工|投訴|human|complaint/i.test(text)) {
         const window = this.pendingWindow(c.id);
@@ -193,7 +340,7 @@ export class Engine {
       return { conversationId: c.id, messageId: id, duplicate: false };
     });
   }
-  receiveSelfTest({address,eventId,text,timestamp}) {
+  receiveSelfTest({address,eventId,text,timestamp,replyGrantId=null}) {
     if (typeof address !== 'string' || !/^[1-9]\d{7,14}@s\.whatsapp\.net$/.test(address) ||
         typeof eventId !== 'string' || !eventId || eventId.length > 300 || typeof text !== 'string' || !text.trim() || text.length > 4000 ||
         !Number.isFinite(timestamp) || timestamp < this.now()-300000 || timestamp > this.now()+60000) throw new ServiceError('自傳測試訊息無效。');
@@ -209,9 +356,15 @@ export class Engine {
         c = this.store.conversation(id);
       }
       this.invalidate(c.id);
-      this.store.run("UPDATE conversations SET state='self_test',name='WhatsApp 自傳測試（只讀）' WHERE id=?",c.id);
+      const eligible=this.selfReply.enabled&&replyGrantId===this.selfReply.grantId;
+      const nextState=eligible?(c.state==='self_human'?'self_human':'self_auto'):'self_test';
+      this.store.run("UPDATE conversations SET state=?,name=?,last_customer_at=MAX(last_customer_at,?) WHERE id=?",nextState,eligible?'WhatsApp 本人對話測試':'WhatsApp 自傳測試（只讀）',eligible?Math.min(timestamp,this.now()):0,c.id);
       const messageId=this.store.addMessage(c.id,'user',text,{status:'received',providerId:eventId,
         providerInstance:this.evolution.instance || null,engine:'whatsapp-self-test',decision:'test_only'});
+      if(eligible){
+        this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,null,replyGrantId,eventId,'input',null);
+        this.answerSelfTest(this.store.conversation(c.id),messageId);
+      }
       this.store.audit('whatsapp_self_test_received',c.id);
       return {conversationId:c.id,messageId,duplicate:false,selfTest:true,customerAcceptance:false};
     });
@@ -236,17 +389,18 @@ export class Engine {
     return this.store.transaction(() => {
       const now = this.now();
       const result = this.store.run('INSERT OR IGNORE INTO provider_receipts VALUES (?,?,?,?,?)', instance, providerId, address, status, now);
-      this.store.run(`INSERT INTO channel_activity(instance,last_receipt_at) VALUES (?,?)
+      const selfTest=receipt.selfTest===true||Boolean(this.store.get("SELECT id FROM conversations WHERE channel='whatsapp_self_test' AND address=?",address));
+      if(!selfTest)this.store.run(`INSERT INTO channel_activity(instance,last_receipt_at) VALUES (?,?)
         ON CONFLICT(instance) DO UPDATE SET last_receipt_at=excluded.last_receipt_at`, instance, now);
       const message = this.store.get(`SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
-        WHERE m.provider_instance=? AND m.provider_id=? AND c.channel='evolution' AND c.address=? AND m.role IN ('assistant','staff')`, instance, providerId, address);
+        WHERE m.provider_instance=? AND m.provider_id=? AND c.channel IN ('evolution','whatsapp_self_test') AND c.address=? AND m.role IN ('assistant','staff')`, instance, providerId, address);
       if (message) this.reconcileReceipts(message.id);
       return { duplicate: result.changes === 0, matched: Boolean(message) };
     });
   }
   reconcileReceipts(messageId) {
     const m = this.store.get(`SELECT m.*,c.address,c.channel FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?`, messageId);
-    if (!m || m.channel !== 'evolution' || !m.provider_id || !m.provider_instance || !['assistant','staff'].includes(m.role)) return;
+    if (!m || !['evolution','whatsapp_self_test'].includes(m.channel) || !m.provider_id || !m.provider_instance || !['assistant','staff'].includes(m.role)) return;
     // A late SERVER_ACK or ERROR must never erase observed delivery/read evidence.
     const rank = { sending: 0, uncertain: 0, accepted: 1, failed: 2, delivered: 3, read: 4 };
     if (!(m.status in rank)) return;
@@ -262,56 +416,93 @@ export class Engine {
     if (!c || c.channel === 'whatsapp_self_test' || c.state !== 'ai' || c.version !== job.version) {
       this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id); return;
     }
-    if (this.inboxPolicy().enabled) {
+    const policy = this.inboxPolicy();
+    if (this.agent.provider==='codex-cli' && (!policy.enabled || !policy.aiFallback)) {
       this.store.transaction(()=>{
-        const message = this.store.get('SELECT * FROM messages WHERE id=?', job.id);
-        if (message) this.answerFromKnowledge(c, message);
-        this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id);
+        const window=this.pendingWindow(c.id);
+        if(window)this.handoffWindow(window,'ai_fallback_disabled');
+        this.store.run("UPDATE jobs SET state='done' WHERE id=?",job.id);
       });
       return;
     }
-    const revision = this.store.value('revision');
+    if (policy.enabled) {
+      const outcome = this.store.transaction(()=>{
+        const message = this.store.get('SELECT * FROM messages WHERE id=?', job.id);
+        const result = message && this.answerFromKnowledge(c, message, '', {scheduleAi:false});
+        if (result !== 'ai') this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id);
+        return result;
+      });
+      if (outcome !== 'ai') return;
+    }
+    const revision = this.store.value('revision'), agent = this.agent;
+    const facts = this.store.facts(), controller = new AbortController();
+    const active = { conversationId:c.id, jobId:job.id, version:c.version, revision, agent, controller };
+    this.generation = active;
     this.store.run("UPDATE jobs SET state='running' WHERE id=?", job.id);
+    const window = this.pendingWindow(c.id);
+    const timeoutMs = Math.max(1, Math.min(this.responseTimeoutMs, window ? window.deadline_at-this.now() : this.responseTimeoutMs));
+    let rejectAbort;
+    const aborted = new Promise((resolve,reject)=>{rejectAbort=()=>reject(new Error('GENERATION_ABORTED'));controller.signal.addEventListener('abort',rejectAbort,{once:true});});
+    aborted.catch(()=>{});
+    const timer = setTimeout(()=>controller.abort('generation_timeout'),timeoutMs);
     try {
-      const result = await this.agent.reply({ profile: this.store.value('profile'), facts: this.store.facts(), history: this.store.history(c.id) });
+      const raw = await Promise.race([agent.reply({ profile: this.store.value('profile'), facts, history: this.store.history(c.id) }, {signal:controller.signal}),aborted]);
       // Enforce the boundary even when no monitor tick occurred during the await.
       this.checkDeadlines();
       this.store.transaction(() => {
         const current = this.store.conversation(c.id);
-        if (!this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version && revision === this.store.value('revision')) {
+        if (!this.stopping && !controller.signal.aborted && agent === this.agent && current?.state === 'ai' && current.version === c.version && revision === this.store.value('revision')) {
+          const {engine:resultEngine,...payload}=raw||{};
+          let result=validateReply(payload,facts,resultEngine||agent.provider||'openai');
+          const currentFacts = new Map(this.store.facts().filter(f=>f.category!=='style').map(f=>[f.id,f]));
+          const inputFacts = new Map(facts.filter(f=>f.category!=='style').map(f=>[f.id,f]));
+          const references=[...result.sourceIds,...(result.procedureIds||[])];
+          if (references.some(id=>!inputFacts.has(id)||!currentFacts.has(id)||currentFacts.get(id).content!==inputFacts.get(id).content)) throw new Error('STALE_GENERATION_SOURCE');
+          const refundSource=result.sourceIds.some(id=>currentFacts.get(id).category==='refund');
+          if(refundSource)result={text:'這項退換安排需要由本人核對。',decision:'handoff',sourceIds:[],engine:result.engine};
           const settings = this.store.value('settings');
-          const canAuto = settings.mode === 'auto' && result.decision === 'answer' &&
-            (c.channel === 'demo' || (this.agent.configured && (c.channel === 'web' ? this.webChatEnabled : this.liveReady())));
+          const automatic = policy.enabled ? this.inboxPolicy().automaticAi : settings.mode === 'auto';
+          const canAuto = automatic && result.decision === 'answer' && result.sourceIds.length>0 &&
+            (c.channel === 'demo' || (agent.configured && (c.channel === 'web' ? this.webChatEnabled : this.liveReady())));
           if (result.decision === 'handoff') {
             const window = this.pendingWindow(c.id);
-            if (window) this.handoffWindow(window, 'agent_requests_human');
+            if (window) this.handoffWindow(window, refundSource ? 'knowledge_requires_human' : 'agent_requests_human');
             else this.store.run("UPDATE conversations SET state='waiting' WHERE id=?", c.id);
           }
           this.store.addMessage(c.id, 'assistant', result.text, {
             status: result.decision === 'handoff' ? 'draft' : canAuto ? 'queued' : 'draft',
-            sources: result.sourceIds, decision: result.decision, engine: result.engine,
+            sources: [...new Set([...result.sourceIds,...(result.procedureIds||[])])], decision: result.decision, engine: result.engine,
           });
-          if (result.decision === 'handoff') this.store.audit('agent_requests_human', c.id);
+          if (result.decision === 'handoff') this.store.audit(refundSource ? 'knowledge_requires_human' : 'agent_requests_human', c.id);
         }
         // A knowledge edit during generation should regenerate, not silently lose
         // a still-current customer request. Takeover/newer input remains final.
-        const next = !this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version && revision !== this.store.value('revision') ? 'pending' : 'done';
+        const currentPolicy=this.inboxPolicy();
+        const eligible=!currentPolicy.enabled || (currentPolicy.aiFallback && this.agent.configured);
+        const next = !this.stopping && agent===this.agent && eligible && current?.state === 'ai' && current.version === c.version && revision !== this.store.value('revision') ? 'pending' : 'done';
         this.store.run('UPDATE jobs SET state=? WHERE id=?', next, job.id);
       });
     } catch {
       this.checkDeadlines();
       this.store.transaction(() => {
         const current = this.store.conversation(c.id);
-        const stillCurrent = !this.inboxPolicy().enabled && current?.state === 'ai' && current.version === c.version;
-        this.store.run('UPDATE jobs SET state=? WHERE id=?', stillCurrent ? 'failed' : 'done', job.id);
-        if (stillCurrent) {
+        const currentPolicy=this.inboxPolicy();
+        const eligible=!currentPolicy.enabled || (currentPolicy.aiFallback && this.agent.configured);
+        const stillCurrent = current?.state === 'ai' && current.version === c.version;
+        const reason=controller.signal.reason;
+        const retry = stillCurrent && eligible && agent===this.agent && (reason==='shutdown'||reason==='revision_changed'||revision!==this.store.value('revision'));
+        this.store.run('UPDATE jobs SET state=? WHERE id=?', retry ? 'pending' : stillCurrent ? 'failed' : 'done', job.id);
+        if (stillCurrent && !retry) {
           const window = this.pendingWindow(c.id);
           if (window) this.handoffWindow(window, 'generation_failed');
           else this.store.run("UPDATE conversations SET state='waiting' WHERE id=?", c.id);
           this.store.addMessage(c.id, 'system', 'AI 暫時未能完成回覆，請由人工處理。', { status: 'failed' });
         }
-        this.store.audit('generation_failed', c.id);
+        if (!retry && stillCurrent) this.store.audit('generation_failed', c.id);
       });
+    } finally {
+      clearTimeout(timer);controller.signal.removeEventListener('abort',rejectAbort);
+      if(this.generation===active)this.generation=null;
     }
   }
   channelReady() { return Boolean(this.evolution.configured && this.evolution.deliveryEnabled); }
@@ -353,14 +544,31 @@ export class Engine {
     if (!m || m.status !== 'queued') return;
     const c = this.store.conversation(m.conversation_id);
     if (c?.channel === 'whatsapp_self_test') {
-      this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);
-      this.store.audit('whatsapp_self_test_send_blocked',m.id);return;
+      return this.dispatchSelfTest(m,c);
     }
     const stateOkay = m.role === 'staff' ? c?.state === 'human' : c?.state === 'ai';
-    const validFacts = new Set(this.store.facts().map(f => f.id));
-    const expiredSource = m.role === 'assistant' && JSON.parse(m.sources).some(id => !validFacts.has(id));
-    if (!stateOkay || m.version !== c.version || m.config_version !== this.store.value('revision') || expiredSource) {
+    const policy=this.inboxPolicy();
+    const nativeDisabled=m.role==='assistant'&&m.engine==='codex-cli'&&(!policy.enabled||!policy.aiFallback||!this.agent.configured);
+    const validFacts = new Map(this.store.facts().map(f => [f.id,f]));
+    const sources=JSON.parse(m.sources);
+    const expiredSource = m.role === 'assistant' && sources.some(id => !validFacts.has(id));
+    const unsupportedAnswer=m.role==='assistant'&&m.decision==='answer'&&!sources.some(id=>validFacts.has(id)&&!['style','procedure'].includes(validFacts.get(id).category));
+    if (!stateOkay || nativeDisabled || m.version !== c.version || m.config_version !== this.store.value('revision') || expiredSource || unsupportedAnswer) {
       this.store.run("UPDATE messages SET status='cancelled' WHERE id=?", m.id); return;
+    }
+    // Recheck source categories at submission, including explicitly approved
+    // drafts. A later refund classification requires a human-controlled reply.
+    if(m.role==='assistant'&&sources.some(id=>validFacts.get(id)?.category==='refund')){
+      this.store.transaction(()=>{
+        if(!this.pendingWindow(c.id)){
+          const latest=this.store.get("SELECT id FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1",c.id);
+          if(latest)this.openWindow(c.id,latest.id,this.now());
+        }
+        const window=this.pendingWindow(c.id);
+        if(window)this.handoffWindow(window,'knowledge_requires_human');
+        this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);
+      });
+      return;
     }
     if (c.channel === 'demo') { this.beginDispatch(c.id, m, 'simulated'); return; }
     if (c.channel === 'web') {
@@ -425,6 +633,7 @@ export class Engine {
   start() {
     if (this.timer || this.deadlineTimer) return;
     this.stopping = false;
+    this.watchStore();
     this.checkDeadlines();
     // This independent synchronous monitor keeps working while reply()/send()
     // awaits network I/O. A stopped process cannot guarantee a wall-clock SLA.
@@ -436,6 +645,9 @@ export class Engine {
   async stop() {
     this.stopping = true; clearInterval(this.timer); clearInterval(this.deadlineTimer);
     this.timer = null; this.deadlineTimer = null;
+    this.cancelGeneration('shutdown');
     while (this.running || this.dispatching) await new Promise(resolve => setTimeout(resolve, 20));
+    this.unsubscribeStore?.();this.unsubscribeStore=null;
+    await this.agent.close?.();
   }
 }

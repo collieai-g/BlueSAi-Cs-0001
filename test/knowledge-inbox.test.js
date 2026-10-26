@@ -176,11 +176,11 @@ test('schema five is additive and preserves legacy data, policy and local handof
   t.after(()=>{const actual=realpathSync(dir);assert.equal(dirname(actual),parent);assert.ok(basename(actual).startsWith('bluesai-inbox-'));rmSync(actual,{recursive:true});});
   let store=new Store(path);
   const profile=store.value('profile');
-  store.db.exec('DROP TABLE faq_rules;DELETE FROM schema_migrations WHERE version=5;');
+  store.db.exec('DROP TABLE learning_proposals;DROP TABLE learning_cases;DROP TABLE self_test_reply_links;DROP TABLE faq_rules;DELETE FROM schema_migrations WHERE version>=5;');
   store.close();
   store=new Store(path);let engine=new Engine(store,{configured:false,reply:()=>{throw Error('no model');}},{});
   assert.deepEqual(store.value('profile'),profile);
-  assert.equal(store.get('SELECT MAX(version) AS n FROM schema_migrations').n,5);
+  assert.equal(store.get('SELECT MAX(version) AS n FROM schema_migrations').n,7);
   engine.configureInbox({enabled:true,automaticKnowledge:true});
   engine.addFaq({question:'保留問題',answer:'保留答案',approved:true});
   const r=engine.receive({text:'未知問題'});
@@ -189,7 +189,7 @@ test('schema five is additive and preserves legacy data, policy and local handof
   try{
     assert.equal(engine.listFaq()[0].answer,'保留答案');
     assert.equal(engine.inboxStatus().pending[0].conversationId,r.conversationId);
-    assert.deepEqual(engine.inboxPolicy(),{enabled:true,automaticKnowledge:true});
+    assert.deepEqual(engine.inboxPolicy(),{enabled:true,automaticKnowledge:true,aiFallback:false,automaticAi:false});
     assert.equal(store.messages(r.conversationId).length,1);
   }finally{await engine.stop();store.close();}
 });

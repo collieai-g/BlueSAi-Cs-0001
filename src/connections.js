@@ -3,9 +3,22 @@ import { createEvolution } from './evolution.js';
 import { ServiceError } from './engine.js';
 import { receiveDiagnostics } from './receive-diagnostics.js';
 
+// A remembered native/cleared selection must never fall back to ambient API
+// credentials on restart. Native CLI access needs a fresh explicit probe.
+export function createRuntimeAgent(store, aiConfig = {}) {
+  const selected=store.value('reply_provider');
+  const allowed=selected.provider==='environment'||(selected.provider==='openai'&&selected.model===aiConfig.model);
+  return createAgent(allowed?aiConfig:{});
+}
+
 // Secrets stay in server memory/environment, never in status or the database.
-export function createConnections({ engine, store, fetchImpl = fetch, runtime = false, providerConfig = {}, aiConfig = {}, publicBaseUrl = '', webhookSecret = '', localWhatsAppTest = false }) {
-  let ai = { status: engine.agent.configured ? 'configured' : 'unconfigured', model: aiConfig.model || '' };
+export function createConnections({ engine, store, fetchImpl = fetch, runtime = false, providerConfig = {}, aiConfig = {}, publicBaseUrl = '', webhookSecret = '', localWhatsAppTest = false, nativeAgentFactory = null }) {
+  const selected=store.value('reply_provider');
+  const requiresCheck=!engine.agent.configured&&['codex-cli','openai'].includes(selected.provider);
+  let ai = { status: engine.agent.configured || (requiresCheck&&selected.provider==='codex-cli') ? 'configured' : 'unconfigured',
+    model: requiresCheck ? (selected.model||'') : (aiConfig.model||engine.agent.model||''),
+    provider:engine.agent.configured ? (engine.agent.provider||'openai') : requiresCheck ? selected.provider : 'none',requiresCheck };
+  const closeAgent = async agent => { try { await agent?.close?.(); } catch { store.audit('reply_provider_close_failed'); } };
   let waSecret = runtime && providerConfig.url && providerConfig.instance && providerConfig.apiKey
     ? { url: providerConfig.url.replace(/\/$/, ''), instance: providerConfig.instance, apiKey: providerConfig.apiKey } : null;
   let wa = waSecret ? { status: 'configured', url: waSecret.url, instance: waSecret.instance } : { status: 'unconfigured' };
@@ -14,6 +27,8 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
   let inboxReplyEnabled = false;
   let inboxScope = { available:localWhatsAppTest, mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],replyScope:'recent_incoming_only' };
   let testRecipients = { count: 0, maskedNumbers: [], deliveryEnabled: false, activationAvailable: false };
+  const closeSelfReply=()=>engine.setSelfTestReplyScope({available:localWhatsAppTest,enabled:false,automaticFaq:false});
+  closeSelfReply();
   if (localWhatsAppTest) {
     const target = waSecret && new URL(waSecret.url);
     if (!runtime || !target || target.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(target.hostname) || target.pathname !== '/') throw new Error('LOCAL_WHATSAPP_TEST_REQUIRES_LOOPBACK_BRIDGE');
@@ -73,6 +88,16 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     }
   }
   const instancePath = action => `/instance/${action}/${encodeURIComponent(waSecret?.instance || '')}`;
+  async function readSelfReply() {
+    if(!localWhatsAppTest||!runtime||!waSecret)return closeSelfReply();
+    try {
+      const data=await request(instancePath('selfTestReply'));
+      if(typeof data.enabled!=='boolean'||typeof data.automaticFaq!=='boolean'||(data.enabled&&(typeof data.grantId!=='string'||!/^[\w-]{16,100}$/.test(data.grantId))))throw new Error('INVALID_SELF_SCOPE');
+      // Reading a bridge grant can revoke, but never resume a core grant after restart.
+      if(engine.selfReply.enabled&&(!data.enabled||data.grantId!==engine.selfReply.grantId||data.automaticFaq!==engine.selfReply.automaticFaq))closeSelfReply();
+      return {...engine.selfReply};
+    }catch{closeSelfReply();throw new ServiceError('本人對話測試授權未能讀回核對，已停止回覆。',502);}
+  }
   async function refreshTestRecipients() {
     if (!localWhatsAppTest) return;
     const data = await request(instancePath('testRecipients'));
@@ -115,11 +140,20 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const activity = waSecret ? store.get('SELECT * FROM channel_activity WHERE instance=?', waSecret.instance) : null;
       const profile = store.value('profile'), settings = store.value('settings');
       const missingFields = engine.inboxPolicy().enabled ? [] : [!profile.name && '商戶名稱', !profile.service && '服務說明', !settings.handoffContact && '人工接手方式'].filter(Boolean);
-      return { mode: runtime ? 'runtime' : 'preview', runtimeName: runtime ? '客服收發執行器' : '隔離本機預覽', publicBaseUrl: callbackUrl ? new URL(callbackUrl).origin : '', ai: { ...ai }, whatsapp: {
+      let health={};
+      if(engine.agent.provider==='codex-cli'&&typeof engine.agent.health==='function'){
+        try{
+          const current=engine.agent.health();
+          if(['configured','connected','error'].includes(current?.status))health.status=current.status;
+          if(Number.isFinite(current?.checkedAt)&&current.checkedAt>=0)health.checkedAt=current.checkedAt;
+          if(typeof current?.lastError==='string'&&/^[A-Z][A-Z0-9_]{0,63}$/.test(current.lastError))health.lastError=current.lastError;
+        }catch{health={status:'error',lastError:'NATIVE_HEALTH_UNAVAILABLE'};}
+      }
+      return { mode: runtime ? 'runtime' : 'preview', runtimeName: runtime ? '客服收發執行器' : '隔離本機預覽', publicBaseUrl: callbackUrl ? new URL(callbackUrl).origin : '', ai: { ...ai,...health,nativeAvailable:runtime&&typeof nativeAgentFactory==='function' }, whatsapp: {
         ...wa, receiveEnabled: Boolean(runtime && engine.evolution.configured && webhookSecret), deliveryEnabled: Boolean(runtime && engine.evolution.deliveryEnabled),
         webhook: { configured: webhookConfigured(), registered: webhookRegistered, verifiedAt: webhookCheckedAt },
         evidence: { lastIncomingAt: activity?.last_incoming_at || null, lastReceiptAt: activity?.last_receipt_at || null },
-        localTest: localWhatsAppTest, manualTestEnabled, inboxReplyEnabled,inboxScope:{...inboxScope},testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled || inboxReplyEnabled) },
+        localTest: localWhatsAppTest, selfTestReply:{...engine.selfReply}, manualTestEnabled, inboxReplyEnabled,inboxScope:{...inboxScope},testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled || inboxReplyEnabled) },
       } };
     },
     model: input => exclusive(async () => {
@@ -127,10 +161,38 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const candidate = createAgent({ model, apiKey, fetchImpl });
       try { await candidate.reply({ profile: { tone: 'friendly' }, facts: [], history: [{ role: 'user', content: '你好，我想了解服務。' }] }); }
       catch { throw new ServiceError('AI 測試未成功。請檢查金鑰、模型名稱及帳戶額度；模型需支援 Responses 與結構化回覆。', 502); }
-      engine.agent = candidate; ai = { status: 'connected', model, checkedAt: Date.now() }; store.revise();
+      const previous=engine.replaceAgent(candidate,{provider:'openai',model});ai = { status: 'connected', provider:'openai', model, checkedAt: Date.now(),requiresCheck:false };
+      await closeAgent(previous);
       return { message: 'AI 已通過實際回覆測試，可以到「訓練」教客服。' };
     }),
-    clearAI: () => exclusive(async () => { engine.agent = createAgent(); ai = { status: 'unconfigured', model: '' }; store.revise(); }),
+    nativeCodex: input => exclusive(async()=>{
+      if(!runtime||typeof nativeAgentFactory!=='function')throw new ServiceError('這個服務未提供原生 Codex 自動處理。',409);
+      if(!input||input.consent!==true||Object.keys(input).some(key=>key!=='consent'))throw new ServiceError('請確認同意由本機原生 Codex 處理授權的客服文字。');
+      let candidate;
+      try{
+        candidate=await nativeAgentFactory();
+        if(!candidate?.configured||candidate.provider!=='codex-cli'||typeof candidate.check!=='function'||typeof candidate.reply!=='function')throw new Error('INVALID_NATIVE_PROVIDER');
+        await candidate.check();
+      }catch(error){
+        let failureCode;
+        try{failureCode=candidate?.health?.().lastError;}catch{}
+        if(!/^CODEX_[A-Z_]{1,60}$/.test(failureCode||''))failureCode=/^CODEX_[A-Z_]{1,60}$/.test(error?.code||'')?error.code:'NATIVE_PROBE_FAILED';
+        ai={...ai,lastProbeError:failureCode};
+        await closeAgent(candidate);
+        throw new ServiceError(failureCode==='CODEX_TIMEOUT'?'原生 Codex 推理超時，請稍後再試；目前接駁及回覆政策保持不變。':'原生 Codex 測試未成功。請在本機核對 CLI、ChatGPT 登入及可用額度後再試；目前接駁及回覆政策保持不變。',502);
+      }
+      let previous;
+      try{previous=engine.replaceAgent(candidate);}catch(error){await closeAgent(candidate);throw error;}
+      ai={status:'connected',provider:'codex-cli',model:'account_default',checkedAt:Date.now(),requiresCheck:false};
+      await closeAgent(previous);
+      return {message:'原生 Codex 已通過登入及實際回覆測試。AI 後備與自動發送須另外啟用。',provider:'codex-cli'};
+    }),
+    clearAI: () => exclusive(async () => {
+      const policy=engine.inboxPolicy();
+      if(policy.aiFallback||policy.automaticAi)engine.configureInbox({...policy,aiFallback:false,automaticAi:false});
+      const previous=engine.replaceAgent(createAgent());ai = { status: 'unconfigured', provider:'none', model: '',requiresCheck:false };
+      await closeAgent(previous);
+    }),
     whatsapp: (input = {}) => exclusive(async () => {
       if (runtime) {
         if (!providerConfig.url || !providerConfig.instance || !providerConfig.apiKey) throw new ServiceError('請先在伺服器秘密設定填寫 Evolution 網址、instance 及 API key，然後重啟。', 409);
@@ -158,6 +220,8 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const data = await request(instancePath('connectionState'));
       if (localWhatsAppTest) wa.receiveDiagnostics = receiveDiagnostics(data.receiveDiagnostics);
       const state = data.instance?.state; wa.status = ['open', 'close', 'connecting'].includes(state) ? state : 'unknown'; wa.checkedAt = Date.now();
+      if(wa.status!=='open')closeSelfReply();
+      else if(engine.selfReply.enabled)await readSelfReply();
       if (localWhatsAppTest) await refreshTestRecipients();
       return { status: wa.status, message: wa.status === 'open' ? runtime ? 'WhatsApp 裝置已連接；尚須核對 Webhook 及指定測試帳號收發。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : wa.status === 'close' ? '手機尚未連接，請重新取得二維碼。' : wa.status === 'connecting' ? '正在等待手機連接，請完成掃碼後再檢查。' : '服務未回傳可確認的狀態。' };
     }),
@@ -171,9 +235,29 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     }),
     checkWebhook: () => exclusive(checkWebhook),
     getInboxScope:()=>exclusive(refreshInboxScope),
+    getSelfTestReply:()=>exclusive(readSelfReply),
+    configureSelfTestReply:input=>exclusive(async()=>{
+      if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本人對話回覆測試。',409);
+      if(!input||Object.keys(input).some(key=>!['enabled','automaticFaq','consent'].includes(key))||typeof input.enabled!=='boolean'||typeof input.automaticFaq!=='boolean'||input.consent!==true)throw new ServiceError('請確認本人對話測試及知識庫回覆設定。');
+      closeSelfReply();
+      if(input.enabled){
+        if((await request(instancePath('connectionState'))).instance?.state!=='open')throw new ServiceError('請先核對 WhatsApp 手機連線。',409);
+        wa.status='open';wa.checkedAt=Date.now();
+        if(!(await checkWebhook()).registered)throw new ServiceError('請先核對收件網址。',409);
+        const scope=await refreshInboxScope();
+        if(scope.mode!=='all_private_text'||!scope.consented||!scope.includeSelfTests)throw new ServiceError('請先開啟私人文字收件及自身文字測試。',409);
+      }
+      await request(instancePath('selfTestReply'),{method:'PUT',data:input});
+      const data=await request(instancePath('selfTestReply'));
+      if(data.enabled!==input.enabled||data.automaticFaq!==(input.enabled&&input.automaticFaq))throw new ServiceError('本人測試設定讀回不相符，尚未開啟回覆。',502);
+      const provider=createEvolution({...waSecret,fetchImpl});
+      const result=engine.setSelfTestReplyScope({...data,available:true},value=>provider.sendSelfTest(value));
+      return {...result,message:input.enabled?'本人對話回覆測試已開啟；請從手機傳一則新 Hello。舊訊息不會重新回覆。':'本人對話回覆測試已關閉。'};
+    }),
     configureInboxScope:input=>exclusive(async()=>{
       if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本機即時收件範圍設定。',409);
       manualTestEnabled=false;inboxReplyEnabled=false;
+      closeSelfReply();
       engine.evolution=createEvolution({...providerConfig,deliveryEnabled:false,fetchImpl});store.revise();
       const includeSelfTests=input?.includeSelfTests===true;
       if(!input||!['test','all_private_text'].includes(input.mode)||input.consent!==true||typeof input.replyToReceived!=='boolean'||(input.includeSelfTests!==undefined&&typeof input.includeSelfTests!=='boolean')||(input.mode==='test'&&(input.replyToReceived||includeSelfTests)))throw new ServiceError('請確認收件範圍、最近來訊回覆及自身文字測試。');
@@ -194,6 +278,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       // checks and unknown provider writes from a previously active session.
       manualTestEnabled = false;
       inboxReplyEnabled = false;
+      closeSelfReply();
       engine.evolution = createEvolution({ ...providerConfig, deliveryEnabled:false, fetchImpl });
       store.revise();
       if (input?.consent !== true || typeof input.number !== 'string') throw new ServiceError('請填寫測試號碼並確認已獲同意。');
@@ -218,6 +303,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       // Close the core sender before waiting on a slow or unavailable bridge.
       manualTestEnabled = false;
       inboxReplyEnabled = false;
+      closeSelfReply();
       inboxScope={...inboxScope,mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media']};
       if (runtime) { engine.evolution = createEvolution(); store.revise(); }
       if (localWhatsAppTest && waSecret) {

@@ -13,13 +13,14 @@
     "reference_repository": "https://github.com/collieai-g/Blueprint-Studio-Open-Source",
     "integration": "1.0"
   },
-  "storage": {"scope": "one merchant per process and private data directory", "runtime": "node-sqlite", "schema_minimum": 2, "schema_current": 5, "upgrade_migrations": [3, 4, 5]},
+  "storage": {"scope": "one merchant per process and private data directory", "runtime": "node-sqlite", "schema_minimum": 2, "schema_current": 7, "upgrade_migrations": [3, 4, 5, 6, 7]},
   "modes": {
     "collaboration": {"status": "supported", "execution": "current connected client; explicit user request", "renderer": "standard", "evidence": "test/install.test.js; test/dot-tasks.test.js"},
     "web-chat": {"status": "requires_setup", "execution": "independent Node service; explicit WEB_CHAT_ENABLED; restricted guest sessions", "evidence": "test/web-chat.test.js", "live_receipt": "not_verified"},
     "whatsapp": {"status": "requires_setup", "execution": "independent Node 24.22+ service and a real linked-device channel; user QR scan; explicit receive scope and reply authorization", "evidence": "test/service.test.js; test/whatsapp-runtime.test.js; test/whatsapp-inbox-scope.test.js", "live_receipt": "not_verified"}
   },
   "capabilities": {
+    "knowledge_learning": {"status": "requires_setup", "execution": "verified native Codex or configured model API; bounded submitted-human examples; proposals require owner review", "api_namespace": "/api/agents/bluesai-cs-0001/knowledge-learning", "evidence": "test/knowledge-learning.test.js; test/knowledge-learning-http.test.js; docs/KNOWLEDGE_LEARNING_VERIFICATION.md", "live_host": "not_verified"},
     "native_management_tabs": {"status": "requires_setup", "renderer": "bluesai-management/1", "api": "bluesai-management-api/1", "evidence": "integrations/blueprint/sites/renderer-contract.json", "live_host": "not_verified"},
     "continuous_ai": {"status": "requires_setup", "execution": "independent service, configured model, approved facts and explicit delivery setting; never current Codex chat"},
     "sites_backend": {"status": "unsupported", "reason": "Public Sites D1/R2 adapter and reviewed native renderer are not in this package. Node SQLite cannot run inside Workers."},

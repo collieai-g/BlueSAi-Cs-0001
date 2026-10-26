@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto';
 export const defaults = {
   profile: { name: '', industry: '', service: '', instructions: '', tone: 'friendly' },
   settings: { mode: 'review', handoffContact: '' },
-  inbox_policy: { enabled: false, automaticKnowledge: false },
+  inbox_policy: { enabled: false, automaticKnowledge: false, aiFallback: false, automaticAi: false },
+  reply_provider: { provider: 'environment' },
+  knowledge_learning: { automaticAnalysis: false },
   revision: 1,
 };
 
@@ -50,7 +52,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
       const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
-      if (latest > 5) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest > 7) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
       if (latest < 1) {
         this.db.exec(`
           CREATE TABLE response_windows (
@@ -115,6 +117,37 @@ export class Store {
           CREATE INDEX faq_rules_question ON faq_rules(normalized_question);`);
         this.run('INSERT INTO schema_migrations VALUES (?,?)', 5, Date.now());
       }
+      if (latest < 6) {
+        this.db.exec(`CREATE TABLE self_test_reply_links (
+          message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          input_message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+          grant_id TEXT NOT NULL, request_provider_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('input','faq','manual')),
+          operation_id TEXT UNIQUE);
+          CREATE UNIQUE INDEX self_test_one_faq ON self_test_reply_links(input_message_id,grant_id) WHERE kind='faq';`);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 6, Date.now());
+      }
+      if (latest < 7) {
+        this.db.exec(`CREATE TABLE learning_cases (
+          id TEXT PRIMARY KEY,
+          source_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          source_digest TEXT NOT NULL, snapshot_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','analyzing','analyzed','failed')),
+          error_code TEXT, created_at INTEGER NOT NULL, analyzed_at INTEGER);
+          CREATE TABLE learning_proposals (
+          id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES learning_cases(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('fact','procedure','style')),
+          title TEXT NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, rationale TEXT NOT NULL,
+          evidence_json TEXT NOT NULL, questions_json TEXT NOT NULL, proposal_digest TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+          knowledge_id TEXT REFERENCES knowledge(id) ON DELETE SET NULL,
+          created_at INTEGER NOT NULL, reviewed_at INTEGER,
+          UNIQUE(case_id,proposal_digest));
+          CREATE INDEX learning_cases_status ON learning_cases(status,created_at);
+          CREATE INDEX learning_proposals_status ON learning_proposals(status,created_at);`);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 7, Date.now());
+      }
     });
   }
   run(sql, ...args) {
@@ -159,8 +192,9 @@ export class Store {
       FROM conversations c ORDER BY updated_at DESC LIMIT 200`);
   }
   messages(id) {
-    return this.all('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at, rowid', id)
-      .map(m => ({ ...m, sources: JSON.parse(m.sources) }));
+    return this.all(`SELECT m.*,s.operation_id FROM messages m LEFT JOIN self_test_reply_links s ON s.message_id=m.id
+      WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid`, id)
+      .map(({operation_id,...m}) => ({ ...m, sources: JSON.parse(m.sources), ...(operation_id?{operation_id}:{}) }));
   }
   history(id) {
     return this.messages(id).filter(m => m.role === 'user' || (['assistant','staff'].includes(m.role) && ['simulated','accepted','delivered','read'].includes(m.status)))

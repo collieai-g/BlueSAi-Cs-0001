@@ -252,7 +252,7 @@ test('DOT task migration and restart preserve existing handoff state and immutab
   store.set('profile', { ...store.value('profile'), name: '保留商戶' });
   await engine.stop();
   // Build an actual v1 database, removing all later additive objects.
-  store.db.exec(`DROP TABLE faq_rules; DROP TABLE dot_tasks; DROP TABLE provider_receipts; DROP TABLE channel_activity;
+  store.db.exec(`DROP TABLE learning_proposals;DROP TABLE learning_cases;DROP TABLE self_test_reply_links; DROP TABLE faq_rules; DROP TABLE dot_tasks; DROP TABLE provider_receipts; DROP TABLE channel_activity;
     DROP TABLE web_chat_sessions; ALTER TABLE messages DROP COLUMN provider_instance;
     DELETE FROM schema_migrations WHERE version>=2`);
   store.close();
@@ -267,7 +267,7 @@ test('DOT task migration and restart preserve existing handoff state and immutab
   const reopened = new Store(path);
   try {
     const rows = reopened.all('SELECT version FROM schema_migrations ORDER BY version');
-    assert.deepEqual(rows.map(x => x.version), [1, 2, 3, 4, 5]);
+    assert.deepEqual(rows.map(x => x.version), [1, 2, 3, 4, 5, 6, 7]);
     const persisted = reopened.get('SELECT * FROM dot_tasks WHERE id=?', task.id);
     assert.deepEqual(persisted, original);
     assert.deepEqual(reopened.all('SELECT * FROM handoff_tasks'), handoff);

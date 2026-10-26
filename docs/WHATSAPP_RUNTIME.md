@@ -1,6 +1,6 @@
 # 真實 WhatsApp 連結與收發
 
-版本：0.3.0-preview.2。這是客服卡片的實際渠道路線，日常操作見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)。
+版本：0.4.0-preview.1。這是客服卡片的實際渠道路線，日常操作見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)。
 
 ## 兩種實際服務
 
@@ -33,6 +33,12 @@ Baileys 是第三方非官方連結裝置整合，不是 Meta Cloud API。依賴
 一般 `DELIVERY_ENABLED` 預設 false。可信橋接模式另外需要 `LOCAL_WHATSAPP_TEST=true`、卡片中選定測試號碼及明確確認後的程序內測試發送；保持 review，重啟後重新核對及確認，不默默沿用啟用狀態。
 
 首次手動測試不需要模型金鑰。商戶名稱、服務與人工聯絡方式使用本人真實資料；未知欄位保持空白，不能預填虛構政策繞過發送門檻。要測自動 AI，再設定可用模型、有效批准知識及相應回覆模式。
+
+## 本人帳戶的獨立回覆測試
+
+自身新文字預設只讀；另行開啟「本人對話回覆測試」及本人同意後，核心與橋接以當次帳戶綁定隨機 grant，才可測新自身來訊的唯一有效 approved FAQ 或專用人工回覆。沒有 CLI／API／DOT 後備，不開放外部號碼。舊 Hello 不補跑；手機須再傳新 Hello。人工後明確交回自動只影響下一則來訊。
+
+核心 schema 6 保存 grant／input／operation 關聯，橋接保存已觀察自身來訊及冪等記錄。客服發訊息的 ID＋address 回聲不論 fromMe 值都攔截；uncertain 自停不重送；重啟、斷線、換帳戶或撤銷關閉授權。這是自己的真實手機回覆測試，外部顧客驗收仍按下一節另做。[操作與接口](SELF_REPLY_TEST.md)
 
 ## 卡片驗收順序
 

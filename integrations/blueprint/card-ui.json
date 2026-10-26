@@ -19,8 +19,8 @@
     "three_column_min_content_width_css_px": 1080,
     "narrow_layout": "list or selected detail with back navigation and context drawer",
     "management_scope": ["merchant settings", "global reply policy", "channel status and connection guides"],
-    "knowledge_scope": ["approved FAQ", "reviewable memory"],
-    "self_tests": "separate read-only view; excluded from customer pending counts, automation, DOT and sending",
+    "knowledge_scope": ["approved FAQ and semantic model fallback", "reviewable merchant facts, procedures and style", "submitted-human learning cases and pending proposals"],
+    "self_tests": "separate view, read-only by default; owner may explicitly grant account-bound new-input FAQ/manual reply testing; always excluded from customer pending counts and acceptance, CLI/API/DOT learning",
     "unsupported_controls": ["invented CRM properties", "assignment", "SLA", "ticket closure"]
   },
   "design_reference": {
