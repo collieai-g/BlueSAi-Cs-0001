@@ -3,6 +3,21 @@ import { createEvolution } from './evolution.js';
 import { ServiceError } from './engine.js';
 import { receiveDiagnostics } from './receive-diagnostics.js';
 
+// Only fixed bridge categories may reach the card, never provider exceptions.
+const whatsappReasons = new Set(['logged_out','account_not_available','connection_closed','reconnect_failed','credential_save_failed','connection_start_failed','qr_encoding_failed']);
+const connectionReason = value => whatsappReasons.has(value) ? value : '';
+function whatsappFailure(reason) {
+  return {
+    logged_out:'WhatsApp 登入授權已失效，這次裝置連結尚未成功。請先由安裝人員核對，不要反覆掃碼。',
+    account_not_available:'WhatsApp 回報帳戶目前不可用。請在手機核對帳戶及「已連結裝置」狀態。',
+    credential_save_failed:'本機未能保存 WhatsApp 登入資料，已停止連線。請由安裝人員核對私人資料位置及寫入權限。',
+    connection_start_failed:'WhatsApp 連線未能啟動。請核對本機接駁服務及網絡後再試。',
+    reconnect_failed:'WhatsApp 重新連線未成功。請核對接駁服務及手機的連結狀態。',
+    qr_encoding_failed:'二維碼未能產生。請重新取得二維碼；若持續失敗，請核對本機接駁服務。',
+    connection_closed:'WhatsApp 連線已關閉，原二維碼已收起。請核對手機連結狀態，再重新取得二維碼。',
+  }[reason] || '';
+}
+
 // A remembered native/cleared selection must never fall back to ambient API
 // credentials on restart. Native CLI access needs a fresh explicit probe.
 export function createRuntimeAgent(store, aiConfig = {}) {
@@ -213,17 +228,21 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       if (localWhatsAppTest) await refreshTestRecipients();
       const qr = data.base64 || data.qrcode?.base64;
       const safeQr = typeof qr === 'string' && qr.length < 500000 && /^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(qr) ? qr : null;
-      const status = data.instance?.state === 'open' ? 'open' : safeQr ? 'connecting' : 'unknown'; wa.status = status;
-      return { qr: safeQr, status, message: status === 'open' ? runtime ? 'WhatsApp 裝置已連接；Webhook、發送開關及實際收發各自核對。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : safeQr ? '請在 WhatsApp 的「已連結裝置」掃描，完成後按「檢查連線」。' : '服務暫未提供二維碼。請檢查連線狀態，或重新取得二維碼。' };
+      const status = data.instance?.state === 'open' ? 'open' : data.instance?.state === 'close' ? 'close' : safeQr || data.instance?.state === 'connecting' ? 'connecting' : 'unknown';
+      wa.status=status;wa.lastReason=status==='open'?'':connectionReason(data.lastReason);wa.qrAvailable=Boolean(safeQr&&status==='connecting'&&data.qrAvailable!==false);
+      const expiry=Number.isInteger(data.qrExpiresInMs)&&data.qrExpiresInMs>=0&&data.qrExpiresInMs<=20000?data.qrExpiresInMs:undefined;
+      return { qr:wa.qrAvailable?safeQr:null, status, qrAvailable:wa.qrAvailable, ...(expiry!==undefined?{qrExpiresInMs:wa.qrAvailable?expiry:0}:{}), lastReason:wa.lastReason, message: status === 'open' ? runtime ? 'WhatsApp 裝置已連接；Webhook、發送開關及實際收發各自核對。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : whatsappFailure(wa.lastReason) || (wa.qrAvailable ? '請在 WhatsApp 的「已連結裝置」掃描，完成後按「檢查連線」。' : '服務暫未提供二維碼。請檢查連線狀態，或重新取得二維碼。') };
     }),
     checkWhatsApp: () => exclusive(async () => {
       const data = await request(instancePath('connectionState'));
       if (localWhatsAppTest) wa.receiveDiagnostics = receiveDiagnostics(data.receiveDiagnostics);
       const state = data.instance?.state; wa.status = ['open', 'close', 'connecting'].includes(state) ? state : 'unknown'; wa.checkedAt = Date.now();
+      wa.lastReason=wa.status==='open'?'':connectionReason(data.lastReason);
+      if(typeof data.qrAvailable==='boolean'||wa.status!=='connecting')wa.qrAvailable=wa.status==='connecting'&&data.qrAvailable===true;
       if(wa.status!=='open')closeSelfReply();
       else if(engine.selfReply.enabled)await readSelfReply();
       if (localWhatsAppTest) await refreshTestRecipients();
-      return { status: wa.status, message: wa.status === 'open' ? runtime ? 'WhatsApp 裝置已連接；尚須核對 Webhook 及指定測試帳號收發。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : wa.status === 'close' ? '手機尚未連接，請重新取得二維碼。' : wa.status === 'connecting' ? '正在等待手機連接，請完成掃碼後再檢查。' : '服務未回傳可確認的狀態。' };
+      return { status: wa.status, ...(typeof wa.qrAvailable==='boolean'?{qrAvailable:wa.qrAvailable}:{}), lastReason:wa.lastReason, message: wa.status === 'open' ? runtime ? 'WhatsApp 裝置已連接；尚須核對 Webhook 及指定測試帳號收發。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : whatsappFailure(wa.lastReason) || (wa.status === 'close' ? '手機尚未連接，請重新取得二維碼。' : wa.status === 'connecting' ? wa.qrAvailable===false ? '二維碼暫未準備好或已失效，請重新取得後掃描。' : '正在等待手機連接，請完成掃碼後再檢查。' : '服務未回傳可確認的狀態。') };
     }),
     registerWebhook: () => exclusive(async () => {
       if (!webhookConfigured()) throw new ServiceError('請先設定 PUBLIC_BASE_URL、WEBHOOK_SECRET 及 Evolution 伺服器秘密，然後重啟。', 409);

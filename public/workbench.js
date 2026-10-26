@@ -261,7 +261,7 @@ const cardRoot=document.getElementById('cs-card-design');if(!cardRoot)return;car
       const usable=snapshot.knowledge.filter(x=>x.approved&&(!x.expires_at||x.expires_at>Date.now())).length;
       find('[data-memory-count]').textContent=usable+' 條可用';
       const chat=find('[data-training-chat]');chat.replaceChildren();for(const turn of snapshot.training)message(chat,turn.role==='user'?'user':'訓練助手',turn.content);
-      const ai=snapshot.connections.ai,wa=snapshot.connections.whatsapp;paintBackgroundAI();find('[data-wa-status]').textContent=statusNames[wa.status]||'狀態未確認';
+      const ai=snapshot.connections.ai,wa=snapshot.connections.whatsapp;syncWhatsAppQr(wa);paintBackgroundAI();find('[data-wa-status]').textContent=statusNames[wa.status]||'狀態未確認';
       const runtime=snapshot.connections.mode==='runtime';
       const modelLabel={unconfigured:'AI 模型未設定',configured:'AI 模型待驗證',connected:'AI 模型已驗證',error:'AI 模型連線未成功'}[ai.status]||'AI 模型狀態未確認';
       find('[data-runtime-label]').textContent=live?(runtime?'本機測試':'隔離預覽'):'後台尚未接駁';
@@ -377,10 +377,43 @@ const cardRoot=document.getElementById('cs-card-design');if(!cardRoot)return;car
     find('[data-native-disconnect]').addEventListener('click',event=>run(event.currentTarget,async()=>{if(snapshot.connections.ai.provider!=='codex-cli')throw new Error('目前已不是本機 Codex 接駁，請先核對狀態。');await backend.clearAI();clearAiPolicyChoices();await refresh();find('[data-native-result]').textContent='本機 Codex 已停用；AI 後備及 AI 自動發送已關閉，FAQ 設定保留。';report(find('[data-native-result]').textContent);}));
     find('[data-model-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const key=f.elements.apiKey.value;f.elements.apiKey.value='';find('[data-ai-result]').textContent='正在測試連線及模型回覆…';try{const result=await backend.model({model:f.elements.model.value,apiKey:key});find('[data-ai-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-ai-result]').textContent=e.message;throw e;}});});
     find('[data-disconnect-ai]').addEventListener('click',event=>run(event.currentTarget,async()=>{if(snapshot.connections.ai.provider==='codex-cli')throw new Error('請使用「停用本機 Codex 接駁」處理目前路線。');await backend.clearAI();clearAiPolicyChoices();await refresh();find('[data-ai-result]').textContent='模型 API 已清除；AI 後備及 AI 自動發送已關閉，FAQ 設定保留。';report(find('[data-ai-result]').textContent);}));
-    find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{const args=Object.fromEntries(new FormData(f));f.elements.apiKey.value='';if(!args.url?.trim()||!args.instance?.trim()){f.querySelector('details').open=true;throw new Error('接駁服務尚未準備好。請返回第一步，或請安裝人員填寫服務資料。');}find('[data-wa-result]').textContent='正在向服務取得二維碼…';find('[data-qr-box]').hidden=true;try{const result=await backend.whatsapp(args);const holder=find('[data-qr-image]');holder.replaceChildren();find('[data-qr-box]').hidden=!result.qr;if(result.qr){const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';holder.append(img);}find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;await refresh();throw e;}});});
+    let whatsappQrTimer=null,whatsappQrGeneration=0;
+    function clearWhatsAppQr(){
+      clearTimeout(whatsappQrTimer);whatsappQrTimer=null;whatsappQrGeneration++;
+      find('[data-qr-box]').hidden=true;
+      find('[data-qr-image]').replaceChildren();
+    }
+    function syncWhatsAppQr(result){
+      if(result.status!=='connecting'||result.qrAvailable===false)clearWhatsAppQr();
+    }
+    function showWhatsAppQr(result){
+      clearWhatsAppQr();
+      if(!result.qr||result.qrAvailable===false||result.qrExpiresInMs===0||result.status!=='connecting')return;
+      const img=document.createElement('img');img.src=result.qr;img.alt='WhatsApp 裝置連結二維碼';
+      find('[data-qr-image]').append(img);find('[data-qr-box]').hidden=false;
+      const expires=result.qrExpiresInMs,generation=whatsappQrGeneration;
+      if(Number.isInteger(expires)&&expires>0&&expires<=20000)whatsappQrTimer=setTimeout(()=>{
+        if(generation!==whatsappQrGeneration)return;
+        clearWhatsAppQr();find('[data-wa-result]').textContent='二維碼已失效，請重新取得並使用新碼。';
+      },expires);
+    }
+    async function requestWhatsAppQr(form){
+      clearWhatsAppQr();
+      const args=Object.fromEntries(new FormData(form));form.elements.apiKey.value='';
+      if(!args.url?.trim()||!args.instance?.trim()){form.querySelector('details').open=true;throw new Error('接駁服務尚未準備好。請返回第一步，或請安裝人員填寫服務資料。');}
+      find('[data-wa-result]').textContent='正在向服務取得二維碼…';
+      try{const result=await backend.whatsapp(args);showWhatsAppQr(result);find('[data-wa-result]').textContent=result.message;await refresh();report(result.message);}
+      catch(error){clearWhatsAppQr();find('[data-wa-result]').textContent=error.message;await refresh();throw error;}
+    }
+    async function checkWhatsAppConnection(){
+      try{const result=await backend.checkWhatsApp();find('[data-wa-result]').textContent=result.message;syncWhatsAppQr(result);report(result.message);}
+      catch(error){clearWhatsAppQr();find('[data-wa-result]').textContent=error.message;throw error;}
+      finally{await refresh();}
+    }
+    find('[data-whatsapp-form]').addEventListener('submit',event=>{event.preventDefault();const form=event.currentTarget;run(event.submitter,()=>requestWhatsAppQr(form));});
     find('[data-wa-test-recipients]').addEventListener('submit',event=>{event.preventDefault();const f=event.currentTarget;run(event.submitter,async()=>{if(!f.elements.consent.checked)throw new Error('請先確認這個號碼已同意參與測試。');const result=await backend.configureTestRecipient({number:f.elements.number.value.trim(),consent:true});await refresh();report(result.message||'只開放指定號碼作真正 WhatsApp 收發測試。');});});
-    find('[data-wa-check]').addEventListener('click',event=>run(event.currentTarget,async()=>{try{const result=await backend.checkWhatsApp();find('[data-wa-result]').textContent=result.message;if(result.status==='open')find('[data-qr-box]').hidden=true;report(result.message);}catch(e){find('[data-wa-result]').textContent=e.message;find('[data-qr-box]').hidden=true;throw e;}finally{await refresh();}}));
-    find('[data-wa-clear]').addEventListener('click',event=>run(event.currentTarget,async()=>{await backend.clearWhatsApp();find('[data-qr-box]').hidden=true;find('[data-qr-image]').replaceChildren();await refresh();report('已清除本機接駁資料。如要移除手機裝置，請在 WhatsApp 的「已連結裝置」處理。');}));
+    find('[data-wa-check]').addEventListener('click',event=>run(event.currentTarget,checkWhatsAppConnection));
+    find('[data-wa-clear]').addEventListener('click',event=>run(event.currentTarget,async()=>{clearWhatsAppQr();await backend.clearWhatsApp();await refresh();report('已清除本機接駁資料。如要移除手機裝置，請在 WhatsApp 的「已連結裝置」處理。');}));
     for(const [selector,method] of [['[data-webhook-register]','registerWebhook'],['[data-webhook-check]','checkWebhook']])find(selector).addEventListener('click',event=>run(event.currentTarget,async()=>{try{const result=await backend[method]();find('[data-wa-result]').textContent=result.message;report(result.message);}finally{await refresh();}}));
     all('[data-start-guide]').forEach(button=>button.addEventListener('click',()=>{guideFlow=button.dataset.startGuide;guideStep=guideFlow==='whatsapp'?(snapshot.connections.whatsapp.status==='open'?2:snapshot.connections.whatsapp.url?1:0):0;paintGuide();find('[data-guide-title]').focus();}));
     find('[data-guide-close]').addEventListener('click',closeGuide);

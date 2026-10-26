@@ -117,7 +117,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   let testConsentedAt=Number.isSafeInteger(config('test_consented_at'))?config('test_consented_at'):now();
   if(savedInboxScope?.mode==='all_private_text'&&inboxMode!=='all_private_text')setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});
   let webhookEnabled=Boolean(expectedWebhook&&config('webhook_enabled'));
-  let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
+  let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qrGeneration=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
   let ignored=0,reconnectAttempt=0,sendsThisMinute=0,sendWindow=now(),mappingState='not_requested',mappingGeneration=0,testChanging=false,scopeChanging=0,scopeBaseline=null;
   // Reply authority is deliberately process-local. Stored inputs/operations and
   // send IDs survive restart, but none can reopen a grant or retry a send.
@@ -130,7 +130,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   const receiveDiagnostics=()=>({...diagnostics,upserts:{...diagnostics.upserts},rejected:{...diagnostics.rejected},queued:{...diagnostics.queued},callbacks:{...diagnostics.callbacks},lastRejection:{...diagnostics.lastRejection}});
   function reject(reason,count=1){diagnostics.rejected[reason]+=count;diagnostics.lastRejection={reason,at:now()};}
   const inboxScope=()=>{if(inboxMode==='all_private_text'&&state==='open')inboxAccountValid();return {mode:inboxMode,consented:inboxMode==='all_private_text',includeSelfTests,supported:['new_private_text',...(includeSelfTests?['self_test_text']:[])],excluded:['history','groups','broadcasts',...(includeSelfTests?[]:['self_messages']),'media'],sendingScope:'test_allowlist',replyScope:'recent_incoming_only',replyToReceived:inboxReplyEnabled,deliveryEnabled:inboxReplyEnabled};};
-  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
+  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),qrExpiresInMs:qr?Math.max(0,20000-(now()-qrAt)):0,lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
   const scoped=address=>recipients.includes(address.split('@')[0]);
   const inboundScoped=address=>phoneJid.test(address)&&(inboxMode==='all_private_text'?inboxAccountValid():scoped(address));
   function inboxAccountValid(){
@@ -343,7 +343,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     opening=(async()=>{
       let saved;do{saved=saveChain;await saved;}while(saved!==saveChain);
       if(stopped)throw fail('接駁服務已停止。',503);
-      const current=++epoch;state='connecting';lastReason='';
+      const current=++epoch;state='connecting';lastReason='';qrGeneration++;qr=null;qrAt=0;
       const auth=await loadAuth(resolve(dataDir,'auth'));
       if(stopped||current!==epoch)throw fail('接駁服務已停止。',503);
       linkedAuthState=auth.state;
@@ -359,16 +359,16 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       candidate.ev.on('connection.update',update=>{
         if(current!==epoch||stopped)return;
         if(typeof update.qr==='string'){
-          const raw=update.qr;
-          encodeQr(raw).then(image=>{if(current===epoch&&!stopped&&state==='connecting'){qr=image;qrAt=now();}}).catch(()=>{lastReason='qr_encoding_failed';});
+          const raw=update.qr,generation=++qrGeneration;qr=null;qrAt=0;
+          encodeQr(raw).then(image=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting'){qr=image;qrAt=now();}}).catch(()=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting')lastReason='qr_encoding_failed';});
         }
-        if(update.connection==='open'){state='open';qr=null;qrAt=0;reconnectAttempt=0;if(inboxMode==='all_private_text')inboxAccountValid();if(recipients.length)prepareMappings(recipients).catch(error=>{if(error.stale||current!==epoch||stopped||state!=='open'||socket!==candidate)return;sendEnabled=false;lastReason='recipient_mapping_unresolved';});}
+        if(update.connection==='open'){state='open';qrGeneration++;qr=null;qrAt=0;lastReason='';reconnectAttempt=0;if(inboxMode==='all_private_text')inboxAccountValid();if(recipients.length)prepareMappings(recipients).catch(error=>{if(error.stale||current!==epoch||stopped||state!=='open'||socket!==candidate)return;sendEnabled=false;lastReason='recipient_mapping_unresolved';});}
         if(update.connection==='close'){
-          closeSelfReply();state='close';qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
+          closeSelfReply();state='close';qrGeneration++;qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
           const code=update.lastDisconnect?.error?.output?.statusCode;
           lastReason=code===401?'logged_out':code===403?'account_not_available':'connection_closed';
           if([401,403].includes(code)){sendEnabled=false;return;}
-          if(!stopped&&reconnectAttempt<5){const delay=code===515?500:Math.min(30000,1000*2**reconnectAttempt++);retryTimer=setTimeout(()=>connect().catch(()=>{lastReason='reconnect_failed';state='close';}),delay);retryTimer.unref();}
+          if(!stopped&&reconnectAttempt<5){const attempt=reconnectAttempt++,delay=code===515?500:Math.min(30000,1000*2**attempt);retryTimer=setTimeout(()=>connect().catch(()=>{lastReason='reconnect_failed';state='close';}),delay);retryTimer.unref();}
         }
       });
     })().catch(()=>{state='close';socket=null;lastReason='connection_start_failed';throw fail('WhatsApp 連線未能啟動，請核對網絡及已連結裝置。',502);}).finally(()=>{opening=null;});

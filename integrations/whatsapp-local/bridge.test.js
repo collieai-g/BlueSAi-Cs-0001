@@ -51,6 +51,53 @@ test('local bridge starts idle, authenticates owner API and never invents a QR',
   assert.equal(response.data.instance.state,'connecting');
   f.advance(21000);
   assert.equal(f.bridge.status().qrAvailable,false);
+  assert.equal(f.bridge.status().qrExpiresInMs,0);
+});
+
+test('bluesai-whatsapp-link-001: newest QR wins even when encoding finishes out of order',async t=>{
+  const encodings=new Map();
+  const f=await fixture(t,{encodeQr:raw=>new Promise((resolve,reject)=>encodings.set(raw,{resolve,reject}))});
+  const pending=f.api(`/instance/connect/${instance}`);
+  while(!f.socket)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('connection.update',{qr:'synthetic-older'});
+  f.socket.ev.emit('connection.update',{qr:'synthetic-newer'});
+  encodings.get('synthetic-newer').resolve('data:image/png;base64,bmV3ZXI=');
+  await new Promise(resolve=>setImmediate(resolve));
+  encodings.get('synthetic-older').resolve('data:image/png;base64,b2xkZXI=');
+  const response=await pending;
+  assert.equal(response.data.base64,'data:image/png;base64,bmV3ZXI=');
+  assert.equal(response.data.qrExpiresInMs,20000);
+  f.socket.ev.emit('connection.update',{qr:'synthetic-failed-older'});
+  f.socket.ev.emit('connection.update',{qr:'synthetic-final'});
+  assert.equal(f.bridge.status().qrAvailable,false,'a newly issued QR invalidates the previous image before encoding');
+  encodings.get('synthetic-final').resolve('data:image/png;base64,ZmluYWw=');
+  await new Promise(resolve=>setImmediate(resolve));
+  encodings.get('synthetic-failed-older').reject(new Error('synthetic-private-encoding-error'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.bridge.status().lastReason,'');
+  const final=await f.api(`/instance/connect/${instance}`);
+  assert.equal(final.data.base64,'data:image/png;base64,ZmluYWw=');
+  f.socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  assert.equal(f.bridge.status().lastReason,'logged_out');assert.equal(f.bridge.status().qrAvailable,false);assert.equal(f.bridge.status().qrExpiresInMs,0);
+});
+
+test('bluesai-whatsapp-link-001: repeated restart-required closes stop after five automatic retries',async t=>{
+  const sockets=[];
+  const f=await fixture(t,{qrWaitMs:0,makeSocket:()=>{const socket={ev:new EventEmitter(),end:()=>{}};sockets.push(socket);return socket;}});
+  await f.api(`/instance/connect/${instance}`);
+  assert.equal(sockets.length,1);
+  t.mock.timers.enable({apis:['setTimeout']});
+  try{
+    for(let attempt=0;attempt<5;attempt++){
+      sockets.at(-1).ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:515}}}});
+      t.mock.timers.tick(500);await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(sockets.length,attempt+2);
+    }
+    sockets.at(-1).ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:515}}}});
+    t.mock.timers.tick(60000);await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(sockets.length,6);assert.equal(f.bridge.status().instance.state,'close');
+    assert.equal(f.bridge.status().testMode.deliveryEnabled,false);
+  }finally{t.mock.timers.reset();}
 });
 
 test('empty allowlist and old or undated recovered events never forward customer data',async t=>{
