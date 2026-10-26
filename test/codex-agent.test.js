@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCodexAgent, codexExecArgs, codexEnvironment } from '../src/codex-agent.js';
+import { createCodexAgent, codexExecArgs, codexEnvironment,terminateCodexChild } from '../src/codex-agent.js';
 import { validateReply } from '../src/agent.js';
 
 const input={profile:{name:'合成商戶',tone:'friendly'},facts:[{id:'fact-1',title:'合成資料',content:'星期三營業。',category:'hours'}],history:[{role:'user',content:'星期幾營業？'}]};
@@ -150,7 +150,7 @@ test('a timeout remains the primary error if workspace cleanup also fails',async
   let removals=0;
   const f=await fixture(t,()=>{},{timeoutMs:40,removeImpl:async()=>{removals++;throw Object.assign(new Error('synthetic locked directory'),{code:'EPERM'});}});
   await assert.rejects(f.agent.reply(input),/CODEX_TIMEOUT/);
-  assert.equal(removals,10);assert.equal(f.agent.health().lastError,'CODEX_TIMEOUT');assert.equal(f.agent.health().cleanupError,'CODEX_CLEANUP_FAILED');
+  assert.equal(removals,20);assert.equal(f.agent.health().lastError,'CODEX_TIMEOUT');assert.equal(f.agent.health().cleanupError,'CODEX_CLEANUP_FAILED');
 });
 
 test('failed cleanup rejects otherwise successful inference, while cancellation keeps its original code',async t=>{
@@ -158,7 +158,7 @@ test('failed cleanup rejects otherwise successful inference, while cancellation 
   const f=await fixture(t,({child})=>emitReply(child),{removeImpl});await assert.rejects(f.agent.reply(input),/CODEX_CLEANUP_FAILED/);
   assert.equal(f.agent.health().lastError,'CODEX_CLEANUP_FAILED');
   const g=await fixture(t,()=>{},{removeImpl}),controller=new AbortController();controller.abort();
-  await assert.rejects(g.agent.reply(input,{signal:controller.signal}),/CODEX_CANCELLED/);assert.equal(g.agent.health().lastError,'CODEX_CANCELLED');
+  await assert.rejects(g.agent.reply(input,{signal:controller.signal}),/CODEX_CANCELLED/);assert.equal(g.agent.health().lastError,'CODEX_CLEANUP_FAILED');
 });
 
 test('a completed single turn settles and terminates its owned exec even if the CLI never closes',async t=>{
@@ -191,4 +191,70 @@ test('a hanging completed turn still rejects invalid sources and completion with
     const f=await fixture(t,({child})=>{child.stdout.write(events.map(event=>JSON.stringify(event)+'\n').join(''));},{timeoutMs:1000});
     await assert.rejects(f.agent.reply(input),/AI_UNGROUNDED_RESPONSE|CODEX_INCOMPLETE/);assert.deepEqual(await readdir(f.root),[]);
   }
+});
+
+test('caller cancellation preserves previously verified native health and its original verification time',async t=>{
+  let executions=0;
+  const f=await fixture(t,({child})=>{if(++executions===1)emitReply(child);});
+  await f.agent.reply(input);const verified=f.agent.health();assert.equal(verified.status,'connected');
+  const controller=new AbortController(),pending=f.agent.reply(input,{signal:controller.signal});
+  while(executions<2)await new Promise(resolve=>setImmediate(resolve));
+  controller.abort('conversation_changed');await assert.rejects(pending,/CODEX_CANCELLED/);
+  assert.deepEqual(f.agent.health(),verified);assert.deepEqual(await readdir(f.root),[]);
+});
+
+test('cancelling an unverified native request cannot manufacture a successful connection',async t=>{
+  const f=await fixture(t,()=>{}),initial=f.agent.health(),controller=new AbortController();
+  const pending=f.agent.reply(input,{signal:controller.signal});
+  while(!f.calls.some(c=>c.args[0]==='exec'))await new Promise(resolve=>setImmediate(resolve));
+  controller.abort('takeover');await assert.rejects(pending,/CODEX_CANCELLED/);
+  assert.deepEqual(f.agent.health(),initial);assert.equal(f.agent.health().status,'configured');assert.equal(f.agent.health().checkedAt,null);
+});
+
+test('a genuine native timeout still marks a previously verified provider as failed',async t=>{
+  let executions=0;
+  const f=await fixture(t,({child})=>{if(++executions===1)emitReply(child);},{timeoutMs:60});
+  await f.agent.reply(input);assert.equal(f.agent.health().status,'connected');
+  await assert.rejects(f.agent.reply(input),/CODEX_TIMEOUT/);
+  assert.equal(f.agent.health().status,'error');assert.equal(f.agent.health().lastError,'CODEX_TIMEOUT');
+});
+
+test('cancellation cannot overwrite a newer concurrent provider failure with old successful health',async t=>{
+  let executions=0;
+  const f=await fixture(t,({child})=>{executions++;if(executions===1)emitReply(child);else if(executions===3)child.emit('close',1);});
+  await f.agent.reply(input);const controller=new AbortController(),older=f.agent.reply(input,{signal:controller.signal});
+  while(executions<2)await new Promise(resolve=>setImmediate(resolve));
+  await assert.rejects(f.agent.reply(input),/CODEX_REQUEST_FAILED/);const failed=f.agent.health();
+  controller.abort('new_input');await assert.rejects(older,/CODEX_CANCELLED/);assert.deepEqual(f.agent.health(),failed);
+});
+
+function terminationFixture(){
+  const child=new EventEmitter(),killer=new EventEmitter(),calls=[];
+  child.pid=123456;child.exitCode=null;child.signalCode=null;child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{child.killCount=(child.killCount||0)+1;return true;};
+  const spawnImpl=(exe,args,options)=>{calls.push({exe,args,options});return killer;};
+  return {child,killer,calls,spawnImpl};
+}
+
+test('Windows termination waits for both the owned child close and its own taskkill helper exit',async()=>{
+  for(const first of ['child','helper']){
+    const f=terminationFixture();let done=false;
+    const wait=terminateCodexChild(f.child,{platform:'win32',spawnImpl:f.spawnImpl,timeoutMs:500}).then(value=>{done=true;return value;});
+    if(first==='child')f.child.emit('close',null);else f.killer.emit('exit',0);
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(done,false,'One exit boundary cannot release workspace cleanup');
+    if(first==='child')f.killer.emit('exit',0);else f.child.emit('close',null);
+    assert.equal(await wait,true);assert.deepEqual(f.calls[0].args,['/PID','123456','/T','/F']);assert.equal(f.calls[0].options.shell,false);
+  }
+});
+
+test('a taskkill helper that never exits fails the bounded termination gate and only falls back to its owned child',async()=>{
+  const f=terminationFixture();const wait=terminateCodexChild(f.child,{platform:'win32',spawnImpl:f.spawnImpl,timeoutMs:20});
+  f.child.emit('close',null);assert.equal(await wait,false);assert.equal(f.child.killCount,1);assert.equal(f.calls.length,1);
+  // Late failure of our helper is drained instead of crashing the parent.
+  f.killer.emit('error',new Error('synthetic late helper failure'));assert.equal(f.child.killCount,2);
+});
+
+test('taskkill spawn failure cannot be reported as confirmed process-tree termination',async()=>{
+  const f=terminationFixture();f.child.kill=()=>{f.child.killCount=(f.child.killCount||0)+1;f.child.emit('close',null);return true;};
+  const wait=terminateCodexChild(f.child,{platform:'win32',spawnImpl:f.spawnImpl,timeoutMs:200});
+  f.killer.emit('error',new Error('synthetic helper spawn failure'));assert.equal(await wait,false);assert.equal(f.child.killCount,1);
 });

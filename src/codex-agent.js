@@ -13,25 +13,35 @@ const toolBoundary='\n你只處理傳入 JSON 的有限資料。沒有任何工�
 const taskInstructions={reply:systemInstruction+toolBoundary,learn:learningInstruction+toolBoundary,analyze:conversationLearningInstruction+toolBoundary};
 const disabledCodeModeWarning='Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.';
 
-function terminateChild(child) {
-  if(!child)return Promise.resolve();
-  // taskkill is asynchronous on Windows. Keep cleanup behind this owned
-  // child's exit boundary, without waiting forever for a broken transport.
-  let settle,timer;
-  const wait=Number.isInteger(child.pid)&&child.pid>0&&child.exitCode==null&&child.signalCode==null
-    ? new Promise(resolveWait=>{
-      settle=()=>{clearTimeout(timer);child.removeListener?.('close',settle);resolveWait();};
-      child.once('close',settle);timer=setTimeout(settle,1000);
-    }):Promise.resolve();
-  if(process.platform==='win32'&&Number.isInteger(child.pid)&&child.pid>0&&child.exitCode==null) {
-    // Only the PID returned by this adapter's own spawn is accepted. No shell,
-    // command text, process-name matching, or unrelated service termination.
-    try {
-      const killer=spawn(join(process.env.SystemRoot||'C:\\Windows','System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{shell:false,windowsHide:true,stdio:'ignore'});
-      const fallback=()=>{try{child.kill();}catch{}};killer.on('error',fallback);killer.on('exit',code=>{if(code!==0)fallback();});killer.unref();
-    }catch{try{child.kill();}catch{}}
-  } else {try{if(process.platform!=='win32'&&Number.isInteger(child.pid)&&child.pid>0)process.kill(-child.pid,'SIGKILL');else child.kill();}catch{try{child.kill();}catch{}}}
-  child.stdin?.destroy();child.stdout?.destroy();child.stderr?.destroy();child.unref?.();
+export function terminateCodexChild(child,{platform=process.platform,spawnImpl=spawn,timeoutMs=2000}={}) {
+  if(!child)return Promise.resolve(true);
+  const running=Number.isInteger(child.pid)&&child.pid>0&&child.exitCode==null&&child.signalCode==null;
+  const fallback=()=>{try{child.kill();}catch{}};
+  let childClosed=!running,helperFinished=platform!=='win32'||!running,helperFailed=false,killer,timer,resolveWait,settled=false;
+  const finish=complete=>{
+    if(settled)return;settled=true;clearTimeout(timer);child.removeListener?.('close',onClose);
+    // Keep the helper's error listener while a timed-out owned helper exits;
+    // a late spawn error must not become an unhandled process exception.
+    resolveWait(complete);
+  };
+  const maybeFinish=()=>{if(childClosed&&helperFinished)finish(!helperFailed);};
+  const onClose=()=>{childClosed=true;maybeFinish();};
+  const onHelperError=()=>{helperFailed=true;helperFinished=true;fallback();maybeFinish();};
+  const onHelperExit=code=>{helperFinished=true;if(code!==0)fallback();maybeFinish();};
+  const wait=new Promise(resolve=>{resolveWait=resolve;});
+  if(running){child.once('close',onClose);timer=setTimeout(()=>{fallback();finish(false);},Math.min(2000,Math.max(1,timeoutMs)));}
+  if(platform==='win32'&&running) {
+    // Only this adapter's owned PID reaches taskkill. Its exit and the owned
+    // child's close are separate gates: destroying stdio may close the child
+    // handle before taskkill has finished terminating the whole process tree.
+    try{
+      killer=spawnImpl(join(process.env.SystemRoot||'C:\\Windows','System32','taskkill.exe'),['/PID',String(child.pid),'/T','/F'],{shell:false,windowsHide:true,stdio:'ignore'});
+      killer.once('error',onHelperError);killer.once('exit',onHelperExit);killer.unref?.();
+    }catch{onHelperError();}
+  }else{
+    try{if(platform!=='win32'&&running)process.kill(-child.pid,'SIGKILL');else fallback();}catch{fallback();}
+  }
+  child.stdin?.destroy();child.stdout?.destroy();child.stderr?.destroy();child.unref?.();maybeFinish();
   return wait;
 }
 
@@ -83,7 +93,7 @@ export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,
     return new Promise((resolveRun,reject)=>{
       let child,settled=false,timer,completionTimer,buffer='',stderrText='',lastText='',complete=false,total=0;
       const decoder=new StringDecoder('utf8');
-      const finish=(error,value,terminate=false)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(completionTimer);signal?.removeEventListener('abort',cancel);active.delete(cancel);if(error||terminate)cleanup.push(terminateChild(child));if(error)reject(error);else resolveRun(value);};
+      const finish=(error,value,terminate=false)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(completionTimer);signal?.removeEventListener('abort',cancel);active.delete(cancel);if(error||terminate)cleanup.push(terminateCodexChild(child));if(error)reject(error);else resolveRun(value);};
       const cancel=()=>finish(failure(signal?.reason?.code==='CODEX_TIMEOUT'?'CODEX_TIMEOUT':'CODEX_CANCELLED'));
       const line=text=>{
         if(!text.trim())return;
@@ -152,7 +162,7 @@ export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,
       if(!relative(root,current).startsWith('run-')||outside(root,current))throw failure('CODEX_CLEANUP_FAILED');
       for(let attempt=0;;attempt++){
         try{await removeImpl(current,{recursive:true,force:true,maxRetries:0});return;}
-        catch(error){if(attempt>=9||!['EBUSY','EPERM','ENOTEMPTY'].includes(error?.code))throw error;await new Promise(resolveWait=>setTimeout(resolveWait,100));}
+        catch(error){if(attempt>=19||!['EBUSY','EPERM','ENOTEMPTY'].includes(error?.code))throw error;await new Promise(resolveWait=>setTimeout(resolveWait,100));}
       }
     }};
   }
@@ -170,11 +180,21 @@ export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,
       const text=await run(codexExecArgs(schemaPath,task),{cwd:work.dir,stdin:JSON.stringify(payload),signal:requestSignal,json:true,cleanup});
       let result;try{result=JSON.parse(text);}catch{throw failure('CODEX_INVALID_RESPONSE');}
       result=validate(result);health={status:'connected',checkedAt:Date.now(),lastError:null};return result;
-    }catch(error){const code=/^(?:CODEX_[A-Z_]+|AI_UNGROUNDED_RESPONSE|TRAINING_INVALID|MODEL_INVALID_PROPOSALS)$/.test(error?.code||error?.message||'')?(error.code||error.message):'CODEX_REQUEST_FAILED';primaryError=failure(code);health={status:'error',checkedAt:Date.now(),lastError:code};throw primaryError;}
+    }catch(error){
+      const code=/^(?:CODEX_[A-Z_]+|AI_UNGROUNDED_RESPONSE|TRAINING_INVALID|MODEL_INVALID_PROPOSALS)$/.test(error?.code||error?.message||'')?(error.code||error.message):'CODEX_REQUEST_FAILED';
+      primaryError=failure(code);
+      // Superseded input, takeover and caller deadlines cancel work normally.
+      // Leave current health untouched, including its verified timestamp; using
+      // an old snapshot here could erase another concurrent request's failure.
+      if(code!=='CODEX_CANCELLED')health={status:'error',checkedAt:Date.now(),lastError:code};
+      throw primaryError;
+    }
     finally{
-      clearTimeout(timer);await Promise.allSettled(cleanup);
-      try{await work?.remove();}catch{
-        if(primaryError)health={status:'error',checkedAt:Date.now(),lastError:primaryError.code,cleanupError:'CODEX_CLEANUP_FAILED'};
+      clearTimeout(timer);
+      const terminated=await Promise.allSettled(cleanup);let cleanupFailed=terminated.some(result=>result.status==='rejected'||result.value!==true);
+      try{await work?.remove();}catch{cleanupFailed=true;}
+      if(cleanupFailed){
+        if(primaryError)health={status:'error',checkedAt:Date.now(),lastError:primaryError.code==='CODEX_CANCELLED'?'CODEX_CLEANUP_FAILED':primaryError.code,cleanupError:'CODEX_CLEANUP_FAILED'};
         else{health={status:'error',checkedAt:Date.now(),lastError:'CODEX_CLEANUP_FAILED'};throw failure('CODEX_CLEANUP_FAILED');}
       }
     }
@@ -199,7 +219,7 @@ export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,
       try{work=await workspace();const version=await run(['--version'],{cwd:work.dir,limit:8192,timeout:5000,cleanup});
         if(!/^codex-cli \d+\.\d+\.\d+/m.test(version))throw failure('CODEX_NOT_AVAILABLE');
       }catch(error){primaryError=error;throw error;}
-      finally{await Promise.allSettled(cleanup);try{await work?.remove();}catch{if(!primaryError)throw failure('CODEX_CLEANUP_FAILED');}}
+      finally{const terminated=await Promise.allSettled(cleanup);let cleanupFailed=terminated.some(result=>result.status==='rejected'||result.value!==true);try{await work?.remove();}catch{cleanupFailed=true;}if(cleanupFailed&&!primaryError)throw failure('CODEX_CLEANUP_FAILED');}
       // Public synthetic facts only. No real conversation, phone or merchant data.
       const result=await agent.reply({profile:{tone:'friendly'},facts:[{id:'connection-probe',title:'合成連線測試',content:'合成測試櫃位在星期三開放。',category:'general'}],history:[{role:'user',content:'合成測試櫃位星期幾開放？'}]});
       if(result.decision!=='answer'||!result.sourceIds.includes('connection-probe'))throw failure('CODEX_PROBE_FAILED');
