@@ -1,6 +1,7 @@
 import { createAgent } from './agent.js';
 import { createEvolution } from './evolution.js';
 import { ServiceError } from './engine.js';
+import { receiveDiagnostics } from './receive-diagnostics.js';
 
 // Secrets stay in server memory/environment, never in status or the database.
 export function createConnections({ engine, store, fetchImpl = fetch, runtime = false, providerConfig = {}, aiConfig = {}, publicBaseUrl = '', webhookSecret = '', localWhatsAppTest = false }) {
@@ -144,6 +145,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       }
       wa = { status: 'configured', url: waSecret.url, instance: waSecret.instance };
       const data = await request(instancePath('connect'));
+      if (localWhatsAppTest) wa.receiveDiagnostics = receiveDiagnostics(data.receiveDiagnostics);
       if (localWhatsAppTest) await refreshTestRecipients();
       const qr = data.base64 || data.qrcode?.base64;
       const safeQr = typeof qr === 'string' && qr.length < 500000 && /^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(qr) ? qr : null;
@@ -152,6 +154,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     }),
     checkWhatsApp: () => exclusive(async () => {
       const data = await request(instancePath('connectionState'));
+      if (localWhatsAppTest) wa.receiveDiagnostics = receiveDiagnostics(data.receiveDiagnostics);
       const state = data.instance?.state; wa.status = ['open', 'close', 'connecting'].includes(state) ? state : 'unknown'; wa.checkedAt = Date.now();
       if (localWhatsAppTest) await refreshTestRecipients();
       return { status: wa.status, message: wa.status === 'open' ? runtime ? 'WhatsApp 裝置已連接；尚須核對 Webhook 及指定測試帳號收發。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : wa.status === 'close' ? '手機尚未連接，請重新取得二維碼。' : wa.status === 'connecting' ? '正在等待手機連接，請完成掃碼後再檢查。' : '服務未回傳可確認的狀態。' };
