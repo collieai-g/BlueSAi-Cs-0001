@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from '../src/store.js';
+import { Engine } from '../src/engine.js';
 import { createKnowledgeLearning, redactLearningText } from '../src/knowledge-learning.js';
 
 const proposal=(messages,extra={})=>({kind:'procedure',title:'到貨查詢處理方法',content:'客戶詢問到貨安排而未說明貨品時，先問清楚貨品；未有資料前不可承諾到貨日。',category:'procedure',
@@ -233,4 +234,70 @@ test('queued human messages remain dispatchable while collecting, analyzing and 
   f.service.analyze(c.caseId);await until(()=>f.service.status().proposals.length===1);f.service.reject(f.service.status().proposals[0].id);
   const m=f.store.get('SELECT status,config_version FROM messages WHERE id=?',pending);
   assert.equal(m.status,'queued');assert.equal(m.config_version,revision);assert.equal(f.store.value('revision'),revision);
+});
+
+test('background analysis defaults to 65 seconds rather than the 25-second customer reply budget',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const store=new Store(':memory:');let signal;
+  const engine={agent:{configured:true,provider:'synthetic',analyzeConversation(input,options){signal=options.signal;return new Promise(()=>{});}}};
+  const service=createKnowledgeLearning({store,engine});
+  t.after(()=>{service.stop();store.close();});
+  store.run('INSERT INTO conversations(id,channel,address,name,state,updated_at) VALUES (?,?,?,?,?,?)','budget-case','web','synthetic-budget','合成預算測試','human',Date.now());
+  store.addMessage('budget-case','user','我的貨品幾時到？');store.addMessage('budget-case','staff','請問哪件貨品？',{status:'accepted'});
+  const id=service.collect().caseIds[0];service.analyze(id);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(service.status().cases[0].status,'analyzing');assert.equal(signal.aborted,false);
+  t.mock.timers.tick(25000);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(service.status().cases[0].status,'analyzing');assert.equal(signal.aborted,false);
+  t.mock.timers.tick(39999);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(service.status().cases[0].status,'analyzing');assert.equal(signal.aborted,false);
+  t.mock.timers.tick(1);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(service.status().cases[0].status,'failed');assert.equal(service.status().cases[0].lastError,'LEARNING_TIMEOUT');assert.equal(signal.aborted,true);
+});
+
+test('the explicit background budget accepts 65 seconds and rejects values beyond its hard maximum',t=>{
+  const store=new Store(':memory:'),engine={agent:{configured:false}};
+  t.after(()=>store.close());
+  const service=createKnowledgeLearning({store,engine,analysisTimeoutMs:65000});service.stop();
+  for(const analysisTimeoutMs of [65001,120000,0,-1,1.5,NaN])assert.throws(()=>createKnowledgeLearning({store,engine,analysisTimeoutMs}),/INVALID_LEARNING_CONFIGURATION/);
+});
+
+test('native model timeout codes map to a fixed learning timeout without exposing provider diagnostics',async t=>{
+  for(const mode of ['message','code']){
+    const f=fixture(t,{analysisTimeoutMs:65000,model:()=>{throw mode==='message'?Error('CODEX_TIMEOUT'):Object.assign(Error('PRIVATE_TIMEOUT_DIAGNOSTIC'),{code:'CODEX_TIMEOUT'});}}),c=await prepare(f);
+    f.service.analyze(c.caseId);await until(()=>f.service.status().cases[0].status==='failed');
+    assert.equal(f.service.status().cases[0].lastError,'LEARNING_TIMEOUT');assert.equal(f.service.status().proposals.length,0);
+    assert.doesNotMatch(JSON.stringify(f.service.status()),/PRIVATE_TIMEOUT_DIAGNOSTIC/);
+  }
+});
+
+test('stop does not wait for the extended analysis budget and late output still cannot access the closed store',{timeout:2000},async t=>{
+  let release;const f=fixture(t,{analysisTimeoutMs:65000,model:input=>new Promise(resolve=>{release=()=>resolve({proposals:[proposal(input.messages)]});})}),c=await prepare(f);
+  f.service.analyze(c.caseId);await until(()=>Boolean(release));
+  const startedAt=Date.now();await f.service.stop();assert.ok(Date.now()-startedAt<500);
+  assert.equal(f.calls[0].options.signal.aborted,true);assert.equal(f.store.get('SELECT error_code FROM learning_cases WHERE id=?',c.caseId).error_code,'LEARNING_INTERRUPTED');
+  let lateAccess=0;for(const key of ['get','all','run','facts']){const original=f.store[key].bind(f.store);f.store[key]=(...args)=>{if(f.store.closed)lateAccess++;return original(...args);};}
+  f.store.close();release();await new Promise(resolve=>setImmediate(resolve));assert.equal(lateAccess,0);
+});
+
+test('turning off automatic analysis still cancels promptly with the extended budget',{timeout:2000},async t=>{
+  const f=fixture(t,{analysisTimeoutMs:65000,model:()=>new Promise(()=>{})});await prepare(f);f.service.configure({automaticAnalysis:true});f.service.start();
+  await until(()=>f.calls.length===1);f.service.configure({automaticAnalysis:false});
+  await until(()=>f.service.status().cases[0].status==='failed',500);
+  assert.equal(f.service.status().cases[0].lastError,'LEARNING_DISABLED');assert.equal(f.calls[0].options.signal.aborted,true);assert.equal(f.service.status().proposals.length,0);
+});
+
+test('a real Engine manual-send lane completes while extended background analysis is still unresolved',{timeout:2500},async t=>{
+  const store=new Store(':memory:');let release,sends=0;
+  const agent={configured:true,provider:'synthetic',reply(){throw Error('The human-controlled conversation must not invoke AI reply');},analyzeConversation(input){return new Promise(resolve=>{release=()=>resolve({proposals:[proposal(input.messages)]});});}};
+  const engine=new Engine(store,agent,{configured:true,deliveryEnabled:true,instance:'synthetic-learning-budget',async send(){sends++;return {providerId:'synthetic-manual-'+sends};}});
+  const service=createKnowledgeLearning({store,engine,analysisTimeoutMs:65000});
+  t.after(async()=>{service.stop();await engine.stop();if(!store.closed)store.close();});
+  engine.configureInbox({enabled:true,automaticKnowledge:false,aiFallback:false,automaticAi:false});
+  const id=engine.receive({channel:'evolution',address:'85255550123@s.whatsapp.net',text:'合成貨品查詢'}).conversationId;
+  engine.takeover(id);store.addMessage(id,'staff','先前已提交的合成人工回覆',{status:'accepted'});
+  const c=service.collect().caseIds[0];service.analyze(c);await until(()=>Boolean(release));
+  const revision=store.value('revision'),outgoingId=engine.manualReply(id,'另一則現在提交的合成人工回覆');
+  await engine.tick();assert.equal(sends,1);assert.equal(store.get('SELECT status FROM messages WHERE id=?',outgoingId).status,'accepted');
+  assert.equal(service.status().cases[0].status,'analyzing');assert.equal(store.value('revision'),revision);
+  service.stop();release();await new Promise(resolve=>setImmediate(resolve));assert.equal(service.status().proposals.length,0);
 });

@@ -79,9 +79,9 @@ export function codexExecArgs(schemaPath,task='reply') {
     ...overrides.flatMap(value=>['-c',value]),...disabledFeatures.flatMap(name=>['--disable',name]),'--enable','skip_host_skill_discovery','-'];
 }
 
-export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,spawnImpl=spawn,removeImpl=rm,env=process.env}={}) {
+export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,learningTimeoutMs=60000,spawnImpl=spawn,removeImpl=rm,env=process.env}={}) {
   if(typeof executable!=='string'||!executable.trim()||/[\r\n\0]/.test(executable)||!isAbsolute(runtimeDir||'')||!outside(sourceRoot,resolve(runtimeDir))||
-    !Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>25000||typeof removeImpl!=='function')throw new Error('CODEX_INVALID_CONFIGURATION');
+    !Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>25000||!Number.isInteger(learningTimeoutMs)||learningTimeoutMs<1||learningTimeoutMs>60000||typeof removeImpl!=='function')throw new Error('CODEX_INVALID_CONFIGURATION');
   let closed=false,health={status:'configured',checkedAt:null,lastError:null};
   const active=new Set(),safeEnv=codexEnvironment(env);
   const failure=code=>Object.assign(new Error(code),{code});
@@ -166,18 +166,19 @@ export function createCodexAgent({executable='codex',runtimeDir,timeoutMs=25000,
       }
     }};
   }
-  async function login(cwd,signal,cleanup) {
-    const status=await run(['login','status'],{cwd,signal,cleanup,captureStderr:true,limit:8192,timeout:Math.min(timeoutMs,5000)});
+  async function login(cwd,signal,cleanup,taskBudget) {
+    const status=await run(['login','status'],{cwd,signal,cleanup,captureStderr:true,limit:8192,timeout:Math.min(taskBudget,5000)});
     if(!/Logged in using ChatGPT/i.test(status))throw failure('CODEX_CHATGPT_LOGIN_REQUIRED');
   }
   async function infer({task,payload,schema,validate,signal}){
     let work,primaryError;const cleanup=[];
-    const deadline=new AbortController(),timer=setTimeout(()=>deadline.abort(failure('CODEX_TIMEOUT')),timeoutMs);
+    const taskBudget=task==='reply'?timeoutMs:learningTimeoutMs;
+    const deadline=new AbortController(),timer=setTimeout(()=>deadline.abort(failure('CODEX_TIMEOUT')),taskBudget);
     const requestSignal=signal?AbortSignal.any([signal,deadline.signal]):deadline.signal;
     try {
-      work=await workspace();await login(work.dir,requestSignal,cleanup);
+      work=await workspace();await login(work.dir,requestSignal,cleanup,taskBudget);
       const schemaPath=join(work.dir,task+'-schema.json');await writeFile(schemaPath,JSON.stringify(schema),{mode:0o600,flag:'wx'});
-      const text=await run(codexExecArgs(schemaPath,task),{cwd:work.dir,stdin:JSON.stringify(payload),signal:requestSignal,json:true,cleanup});
+      const text=await run(codexExecArgs(schemaPath,task),{cwd:work.dir,stdin:JSON.stringify(payload),signal:requestSignal,json:true,timeout:taskBudget,cleanup});
       let result;try{result=JSON.parse(text);}catch{throw failure('CODEX_INVALID_RESPONSE');}
       result=validate(result);health={status:'connected',checkedAt:Date.now(),lastError:null};return result;
     }catch(error){

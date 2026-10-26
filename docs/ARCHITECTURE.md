@@ -37,7 +37,7 @@ Blueprint Studio 提供外層工作空間、身份、導覽、主題及排版。
 
 ## 原生生成與後台控制
 
-原生 adapter 使用已核對的 CLI 執行檔，從 stdin 接收單一客戶有限資料及已批准知識；固定 JSON schema 只定義回覆、決策及來源，不授予操作權。每次工作 ephemeral、最多 25 秒，忽略使用者 config，關閉 shell、apps、MCP、plugins、hooks、多 agent、電腦／瀏覽器、圖片、網頁搜尋及 Skill discovery。遇到意外工具事件或無效結果時拒絕，不把程序原始輸出／私密日誌交前端。
+原生 adapter 使用已核對的 CLI 執行檔，從 stdin 接收單一客戶有限資料及已批准知識；固定 JSON schema 只定義回覆、決策及來源，不授予操作權。每次工作 ephemeral；即時回覆最多 25 秒，獨立背景教學／對話整理推理最多 60 秒、服務含清理等候最多 65 秒，忽略使用者 config，關閉 shell、apps、MCP、plugins、hooks、多 agent、電腦／瀏覽器、圖片、網頁搜尋及 Skill discovery。遇到意外工具事件或無效結果時拒絕，不把程序原始輸出／私密日誌交前端。
 
 CLI 自行沿用既有 ChatGPT 登入；客服不搬移 auth，也不把客服、渠道或模型 API 秘密加入工作資料。runtime 使用倉庫外 `BLUEPRINT_DATA_DIR/codex-jobs`，只放每次臨時 schema，完成清理；prompt 不落此目錄。工具關閉、有限輸入、固定目錄及後台驗證共同限制工作；read-only 字樣本身不代表可讀檔範圍已隔離。
 

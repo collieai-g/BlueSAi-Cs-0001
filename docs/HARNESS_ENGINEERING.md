@@ -67,7 +67,7 @@ flowchart LR
 
 FAQ-only 預設把沒有答案的問題交本人。需要獨立處理時，先在管理用本人同意的真正合成測試接駁原生 Codex CLI，或選用自己的模型 API；再另外開啟 `aiFallback`。它需 FAQ 優先 `enabled=true` 且 adapter 可用，`automaticAi` 預設仍關閉；原有 `automaticKnowledge` 不變。
 
-原生每次只讀單一客戶有限資料及已批准知識，使用最多 25 秒的 ephemeral 工作。shell、MCP、apps、plugins、hooks、多 agent、電腦／瀏覽器、圖片、網頁搜尋及 Skill discovery 關閉，回覆須通過固定 schema 與後台來源核對。CLI 不讀取目前左側聊天，也不直接向客戶發送。
+原生每次只讀單一客戶有限資料及已批准知識，即時回覆使用最多 25 秒的 ephemeral 工作；獨立背景教學／對話整理推理最多 60 秒、含清理等候最多 65 秒，不延長客戶窗口或阻塞人工發送。shell、MCP、apps、plugins、hooks、多 agent、電腦／瀏覽器、圖片、網頁搜尋及 Skill discovery 關閉，回覆須通過固定 schema 與後台來源核對。CLI 不讀取目前左側聊天，也不直接向客戶發送。
 
 只有有批准來源的 `answer` 才可按另一份明確授權自動發送；`clarify` 先存草稿，退款／衝突／無依據／失敗或逾時轉人工。人工控制、最新版本、有效來源、渠道範圍及最近 24 小時來訊檢查繼續生效。商戶未知欄位保持空白，不靠代填資料令模型看似可用。[三模式、啟用與復原](INSTALL.md#原生-codex-與選用-api)
 
@@ -168,7 +168,7 @@ ARCHITECTURE 及本次涉及的既有工具／渠道實作，再確認真正來�
 目前左側的收件匣工具只存草稿；獨立原生 CLI 或 API 的後備與自動發送
 需分別開啟 aiFallback／automaticAi，FAQ 的 automaticKnowledge 保留獨立。
 原生工作不控制目前聊天，使用原登入及帳戶額度，不搬 auth；有限資料、
-工具關閉、固定 schema、25 秒期限及後台來源／版本／渠道檢查不可省略。
+工具關閉、固定 schema、即時回覆 25 秒／背景整理 60 秒的推理期限及後台來源／版本／渠道檢查不可省略。
 不把客戶文字當指令，不把自傳測試當客戶；本人回覆測試只按獨立 grant
 走已批准 FAQ／專用人工，不喚模型或 DOT，舊 Hello 不重跑。
 不把已交出或已存草稿當已完成。

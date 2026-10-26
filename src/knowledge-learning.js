@@ -21,8 +21,8 @@ export function redactLearningText(value) {
     .replace(/(姓名|收件人|我叫)\s*[:：]?\s*[\p{L}·]{1,30}/gu,'$1[已移除姓名]');
 }
 
-export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=25000, intervalMs=1000 }) {
-  if(!Number.isInteger(analysisTimeoutMs)||analysisTimeoutMs<1||analysisTimeoutMs>25000||!Number.isInteger(intervalMs)||intervalMs<10)throw Error('INVALID_LEARNING_CONFIGURATION');
+export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=65000, intervalMs=1000 }) {
+  if(!Number.isInteger(analysisTimeoutMs)||analysisTimeoutMs<1||analysisTimeoutMs>65000||!Number.isInteger(intervalMs)||intervalMs<10)throw Error('INVALID_LEARNING_CONFIGURATION');
   let timer=null,started=false,stopped=false,epoch=0,active=null,scheduled=false;
   const manualQueue=new Set();
   const ready=()=>{
@@ -194,7 +194,7 @@ export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=25000
       });
     }catch(error){
       if(canTouch()){
-        const code=engine.agent!==agent?'LEARNING_PROVIDER_CHANGED':controller.signal.reason==='disabled'?'LEARNING_DISABLED':['LEARNING_DISABLED','LEARNING_TIMEOUT','LEARNING_INTERRUPTED','LEARNING_SOURCE_STALE','LEARNING_INVALID_RESPONSE','LEARNING_PRIVATE_OUTPUT'].includes(error?.message)?error.message:'LEARNING_ANALYSIS_FAILED';
+        const code=engine.agent!==agent?'LEARNING_PROVIDER_CHANGED':controller.signal.reason==='disabled'?'LEARNING_DISABLED':error?.code==='CODEX_TIMEOUT'||error?.message==='CODEX_TIMEOUT'?'LEARNING_TIMEOUT':['LEARNING_DISABLED','LEARNING_TIMEOUT','LEARNING_INTERRUPTED','LEARNING_SOURCE_STALE','LEARNING_INVALID_RESPONSE','LEARNING_PRIVATE_OUTPUT'].includes(error?.message)?error.message:'LEARNING_ANALYSIS_FAILED';
         store.run("UPDATE learning_cases SET status='failed',error_code=? WHERE id=?",code,caseId);store.audit('learning_analysis_failed',caseId);
       }
     }finally{

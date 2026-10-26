@@ -53,7 +53,7 @@ Codex 官方說明指出 `exec` 可沿用已保存登入，`--ephemeral` 不保�
 
 接駁測試失敗不切換 adapter，原有接駁與政策仍按先前設定；不要誤以為已改用原生模式。這條路線需真正的客服 runtime；3101 隔離預覽沒有原生自動處理 worker。核心重啟後先讀回目前 adapter 並重新核對接駁及新 AI 授權，不依上一個 CLI 工作或左側聊天接續。
 
-原生工作固定最多 25 秒，沒有 timeout env。臨時 schema 目錄位於倉庫外的 `BLUEPRINT_DATA_DIR/codex-jobs`，工作完成清理；prompt 透過 stdin，不寫到該目錄。使用 `--ignore-user-config`、`--ephemeral` 及固定啟動限制，關閉 shell、apps、MCP、plugins、hooks、多 agent、瀏覽器、電腦、圖片、網頁搜尋與 Skill discovery。只提供單一客戶有限資料，固定 schema 後仍做後台來源與決策驗證；不把 read-only 旗標單獨當成文件隔離。
+原生即時回覆固定最多 25 秒；獨立背景教學／對話整理推理最多 60 秒，服務含清理等候最多 65 秒，沒有客戶可改的 timeout env。臨時 schema 目錄位於倉庫外的 `BLUEPRINT_DATA_DIR/codex-jobs`，工作完成清理；prompt 透過 stdin，不寫到該目錄。使用 `--ignore-user-config`、`--ephemeral` 及固定啟動限制，關閉 shell、apps、MCP、plugins、hooks、多 agent、瀏覽器、電腦、圖片、網頁搜尋與 Skill discovery。只提供單一客戶有限資料，固定 schema 後仍做後台來源與決策驗證；不把 read-only 旗標單獨當成文件隔離。
 
 先維持 `automaticAi=false`，以草稿核對實際生成結果。`aiFallback` 預設 false，啟用需 FAQ 優先 `enabled=true` 且 adapter 可用；`automaticAi` 需先有 fallback。只有有批准來源的 `answer`，且渠道授權、人工狀態、版本、有效來源及最近 24 小時來訊等檢查都通過，才按另一份明確同意自動發送。`clarify` 留草稿；退款／衝突／無依據／失敗／逾時轉人工，未知商戶欄位保持空白。
 

@@ -25,7 +25,7 @@ function fakeCli(respond){
  };return {calls,spawnImpl};
 }
 function emit(child,result){child.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}})+'\n'+JSON.stringify({type:'turn.completed'})+'\n');child.emit('close',0);}
-async function nativeFixture(t,respond){const root=await mkdtemp(join(tmpdir(),'bluesai-learning-model-')),fake=fakeCli(respond),agent=createCodexAgent({runtimeDir:root,spawnImpl:fake.spawnImpl});t.after(async()=>{agent.close();await rm(root,{recursive:true,force:true});});return {root,agent,...fake};}
+async function nativeFixture(t,respond,options={}){const root=await mkdtemp(join(tmpdir(),'bluesai-learning-model-')),fake=fakeCli(respond),agent=createCodexAgent({runtimeDir:root,spawnImpl:fake.spawnImpl,...options});t.after(async()=>{agent.close();await rm(root,{recursive:true,force:true});});return {root,agent,...fake};}
 
 test('a procedure guides a clarification but never proves a business answer',()=>{
  const facts=[{id:'procedure-1',category:'procedure',content:'先識別貨品。'},{id:'style-1',category:'style',content:'簡明。'},{id:'fact-1',category:'general',content:'提供工作室功能。'}];
@@ -90,4 +90,44 @@ test('native analysis and teaching share cancellation and cleanup without an API
   while(!f.calls.some(c=>c.args[0]==='exec'))await new Promise(resolve=>setImmediate(resolve));
   controller.abort();await assert.rejects(pending,/CODEX_CANCELLED/);assert.equal(f.calls.at(-1).child.killed,true);assert.deepEqual(await readdir(f.root),[]);
  }
+});
+
+test('native teaching and analysis have independent bounded budgets without extending customer replies',async t=>{
+ const learned={text:'請核對流程。',remember:true,title:'識別貨品',content:'資料不足時先確認貨品。',category:'procedure'};
+ const f=await nativeFixture(t,call=>{
+  if(call.args.some(arg=>arg.endsWith('reply-schema.json')))return;
+  setTimeout(()=>emit(call.child,call.args.some(arg=>arg.endsWith('learn-schema.json'))?learned:output),80);
+ },{timeoutMs:40,learningTimeoutMs:300});
+ assert.deepEqual(await f.agent.learn('到貨查詢先識別貨品。'),learned);
+ await assert.rejects(f.agent.reply({profile:{},facts:[],history:[{role:'user',content:'合成即時查詢。'}]}),/CODEX_TIMEOUT/);
+ assert.deepEqual(await f.agent.analyzeConversation(transcript),output);assert.deepEqual(await readdir(f.root),[]);
+ assert.throws(()=>createCodexAgent({runtimeDir:f.root,timeoutMs:25001}),/CODEX_INVALID_CONFIGURATION/);
+ for(const value of [0,60001,1.5])assert.throws(()=>createCodexAgent({runtimeDir:f.root,learningTimeoutMs:value}),/CODEX_INVALID_CONFIGURATION/);
+ const fullBudget=createCodexAgent({runtimeDir:f.root,learningTimeoutMs:60000,spawnImpl:f.spawnImpl});fullBudget.close();
+});
+
+test('a native background-learning deadline still fails and its sixty-second budget respects caller cancellation',async t=>{
+ const timed=await nativeFixture(t,()=>{},{timeoutMs:200,learningTimeoutMs:40});
+ await assert.rejects(timed.agent.analyzeConversation(transcript),/CODEX_TIMEOUT/);assert.equal(timed.agent.health().lastError,'CODEX_TIMEOUT');
+ const f=await nativeFixture(t,()=>{},{learningTimeoutMs:60000}),controller=new AbortController();
+ const pending=f.agent.learn('先確認貨品再回答。',[],{signal:controller.signal});
+ while(!f.calls.some(call=>call.args[0]==='exec'))await new Promise(resolve=>setImmediate(resolve));
+ controller.abort('owner_stopped_learning');await assert.rejects(pending,/CODEX_CANCELLED/);assert.equal(f.calls.at(-1).child.killed,true);assert.deepEqual(await readdir(f.root),[]);
+});
+
+test('API learning uses sixty seconds while ordinary replies retain their existing request budget',async t=>{
+ const budgets=[];t.mock.method(AbortSignal,'timeout',ms=>{budgets.push(ms);return new AbortController().signal;});
+ const agent=createAgent({apiKey:'synthetic-key',model:'synthetic-model',fetchImpl:async(url,options)=>{
+  const name=JSON.parse(options.body).text.format.name;
+  return apiResponse(name==='training_memory'?{text:'請核對流程。',remember:true,title:'貨品識別',content:'先確認貨品。',category:'procedure'}:name==='conversation_learning'?output:{text:'合成事實。',decision:'answer',sourceIds:['fact'],procedureIds:[]});
+ }});
+ await agent.learn('先識別貨品。');await agent.analyzeConversation(transcript);await agent.reply({profile:{},facts:[{id:'fact',category:'general',content:'合成事實。'}],history:[]});
+ assert.deepEqual(budgets,[60000,60000,30000]);
+});
+
+test('API background learning forwards caller cancellation without waiting for its full deadline',async()=>{
+ let requestSignal;
+ const agent=createAgent({apiKey:'synthetic-key',model:'synthetic-model',fetchImpl:async(url,options)=>new Promise((resolve,reject)=>{requestSignal=options.signal;requestSignal.addEventListener('abort',()=>reject(new Error('synthetic request aborted')),{once:true});})});
+ const controller=new AbortController(),pending=agent.analyzeConversation(transcript,{signal:controller.signal});
+ while(!requestSignal)await new Promise(resolve=>setImmediate(resolve));controller.abort();await assert.rejects(pending,/synthetic request aborted/);assert.equal(requestSignal.aborted,true);
 });
