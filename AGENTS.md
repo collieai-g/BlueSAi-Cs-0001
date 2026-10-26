@@ -17,7 +17,8 @@
 - 人工接手、資料批准、發送開關、來源有效性及版本檢查必須在程式落實，不能只靠 prompt。
 - 未明確授權實際發送時，不連接真實客戶渠道。測試使用暫存資料和模擬 provider。
 - 使用者要求真實 WhatsApp 測試時，實作真實連結裝置／收件／回覆路線；本人掃碼及指定測試號碼不可省略。不能用離線規則、模擬 provider 或網頁扮演客人代替真實 WhatsApp 驗收。未完成項目列明缺項及可執行下一步。
-- WhatsApp 自傳連線測試另列只讀檢視，不計入客戶待處理，不觸發知識庫、CLI／API 生成、自動／人工發送、DOT 草稿或外部通知。FAQ 必須唯一吻合且已確認、仍有效；AI answer 須有批准來源才可按獨立授權自動發送，clarify 先存草稿，退款／衝突／無依據／失敗／逾時轉人工。目前聊天的 DOT 工具仍只保存最新版本綁定草稿，不能因開啟編輯器就聲稱已處理或已發送。
+- WhatsApp 自傳測試預設只讀，另列且不計入客戶待處理或外部驗收。本人可明確同意獨立「本人對話回覆測試」：只有當次帳戶綁定隨機 grant 之後的新自身文字，才可 exact-approved FAQ 自動回覆或專用人工回覆；自動 FAQ 另需 self automaticFaq 及全域 enabled／automaticKnowledge；不呼叫 CLI／API／DOT、不發待處理通知。人工提交原子切至 self_human；明確交回 self_auto 只作用下一筆新來訊。舊 Hello 不重跑；已發送 ID＋address 的回聲不論 fromMe 值都攔截，uncertain 自停不重送。重啟、斷線、換帳戶或撤銷關閉 grant，外部顧客授權不變。見 docs/SELF_REPLY_TEST.md。
+- FAQ 必須唯一吻合且已確認、仍有效；AI answer 須有批准來源才可按獨立授權自動發送，clarify 先存草稿，退款／衝突／無依據／失敗／逾時轉人工。目前聊天的 DOT 工具仍只保存最新版本綁定草稿，不能因開啟編輯器就聲稱已處理或已發送。
 - 修改後執行 npm test 及 npm run check。涉及介面時，用瀏覽器驗證主要操作和手機版面。
 - 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服樣式修改 design/customer-agent-card-design.html 後經建置產生，宿主只載入 agent-card.css 的根節點內樣式。public/style.css 僅供舊診斷頁，不能加入宿主卡片 bundle。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
 - 所有對外狀態必須依實際結果：configured 不是 connected，accepted 不是 delivered，repository written 不是 deployed。

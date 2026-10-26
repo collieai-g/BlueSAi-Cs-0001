@@ -26,7 +26,7 @@ export function createInboxContext({ store, engine }) {
     const scopeDigest=hash(facts.map(f=>[f.id,f.content,f.expires_at]));
     const verificationCode=createHmac('sha256',secret).update(JSON.stringify([c.id,c.version,revision,latestMessageId,scopeDigest])).digest('hex');
     return {conversationId:c.id,version:c.version,revision,latestMessageId,verificationCode,capturedAt:Date.now(),
-      conversation:{id:c.id,name:c.name,channel:c.channel,state:c.state,readOnly:selfTest},messages,knowledge:selfTest?[]:knowledge,
+      conversation:{id:c.id,name:c.name,channel:c.channel,state:c.state,readOnly:selfTest},selfTestReply:engine.selfTestReplyStatus(c),messages,knowledge:selfTest?[]:knowledge,
       limits:{historyOmitted:raw.length>messages.length,knowledgeOmitted:selfTest?facts.length:facts.length-knowledge.length},
       scope:selfTest?'read-only WhatsApp self test':'draft only',instructions:selfTest
         ?'This is an actual WhatsApp self-to-self connectivity test, not a customer conversation. Read only; never draft, send, resume automation or count it as customer acceptance.'

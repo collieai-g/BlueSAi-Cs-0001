@@ -27,6 +27,8 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
   let inboxReplyEnabled = false;
   let inboxScope = { available:localWhatsAppTest, mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],replyScope:'recent_incoming_only' };
   let testRecipients = { count: 0, maskedNumbers: [], deliveryEnabled: false, activationAvailable: false };
+  const closeSelfReply=()=>engine.setSelfTestReplyScope({available:localWhatsAppTest,enabled:false,automaticFaq:false});
+  closeSelfReply();
   if (localWhatsAppTest) {
     const target = waSecret && new URL(waSecret.url);
     if (!runtime || !target || target.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(target.hostname) || target.pathname !== '/') throw new Error('LOCAL_WHATSAPP_TEST_REQUIRES_LOOPBACK_BRIDGE');
@@ -86,6 +88,16 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     }
   }
   const instancePath = action => `/instance/${action}/${encodeURIComponent(waSecret?.instance || '')}`;
+  async function readSelfReply() {
+    if(!localWhatsAppTest||!runtime||!waSecret)return closeSelfReply();
+    try {
+      const data=await request(instancePath('selfTestReply'));
+      if(typeof data.enabled!=='boolean'||typeof data.automaticFaq!=='boolean'||(data.enabled&&(typeof data.grantId!=='string'||!/^[\w-]{16,100}$/.test(data.grantId))))throw new Error('INVALID_SELF_SCOPE');
+      // Reading a bridge grant can revoke, but never resume a core grant after restart.
+      if(engine.selfReply.enabled&&(!data.enabled||data.grantId!==engine.selfReply.grantId||data.automaticFaq!==engine.selfReply.automaticFaq))closeSelfReply();
+      return {...engine.selfReply};
+    }catch{closeSelfReply();throw new ServiceError('本人對話測試授權未能讀回核對，已停止回覆。',502);}
+  }
   async function refreshTestRecipients() {
     if (!localWhatsAppTest) return;
     const data = await request(instancePath('testRecipients'));
@@ -141,7 +153,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
         ...wa, receiveEnabled: Boolean(runtime && engine.evolution.configured && webhookSecret), deliveryEnabled: Boolean(runtime && engine.evolution.deliveryEnabled),
         webhook: { configured: webhookConfigured(), registered: webhookRegistered, verifiedAt: webhookCheckedAt },
         evidence: { lastIncomingAt: activity?.last_incoming_at || null, lastReceiptAt: activity?.last_receipt_at || null },
-        localTest: localWhatsAppTest, manualTestEnabled, inboxReplyEnabled,inboxScope:{...inboxScope},testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled || inboxReplyEnabled) },
+        localTest: localWhatsAppTest, selfTestReply:{...engine.selfReply}, manualTestEnabled, inboxReplyEnabled,inboxScope:{...inboxScope},testRecipients: { ...testRecipients }, readiness: { missingFields, canSend: missingFields.length === 0 && engine.liveReady() && wa.status === 'open' && webhookRegistered && (!localWhatsAppTest || manualTestEnabled || inboxReplyEnabled) },
       } };
     },
     model: input => exclusive(async () => {
@@ -204,6 +216,8 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const data = await request(instancePath('connectionState'));
       if (localWhatsAppTest) wa.receiveDiagnostics = receiveDiagnostics(data.receiveDiagnostics);
       const state = data.instance?.state; wa.status = ['open', 'close', 'connecting'].includes(state) ? state : 'unknown'; wa.checkedAt = Date.now();
+      if(wa.status!=='open')closeSelfReply();
+      else if(engine.selfReply.enabled)await readSelfReply();
       if (localWhatsAppTest) await refreshTestRecipients();
       return { status: wa.status, message: wa.status === 'open' ? runtime ? 'WhatsApp 裝置已連接；尚須核對 Webhook 及指定測試帳號收發。' : 'WhatsApp 裝置已連接；本機仍未開啟訊息收發。' : wa.status === 'close' ? '手機尚未連接，請重新取得二維碼。' : wa.status === 'connecting' ? '正在等待手機連接，請完成掃碼後再檢查。' : '服務未回傳可確認的狀態。' };
     }),
@@ -217,9 +231,29 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
     }),
     checkWebhook: () => exclusive(checkWebhook),
     getInboxScope:()=>exclusive(refreshInboxScope),
+    getSelfTestReply:()=>exclusive(readSelfReply),
+    configureSelfTestReply:input=>exclusive(async()=>{
+      if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本人對話回覆測試。',409);
+      if(!input||Object.keys(input).some(key=>!['enabled','automaticFaq','consent'].includes(key))||typeof input.enabled!=='boolean'||typeof input.automaticFaq!=='boolean'||input.consent!==true)throw new ServiceError('請確認本人對話測試及知識庫回覆設定。');
+      closeSelfReply();
+      if(input.enabled){
+        if((await request(instancePath('connectionState'))).instance?.state!=='open')throw new ServiceError('請先核對 WhatsApp 手機連線。',409);
+        wa.status='open';wa.checkedAt=Date.now();
+        if(!(await checkWebhook()).registered)throw new ServiceError('請先核對收件網址。',409);
+        const scope=await refreshInboxScope();
+        if(scope.mode!=='all_private_text'||!scope.consented||!scope.includeSelfTests)throw new ServiceError('請先開啟私人文字收件及自身文字測試。',409);
+      }
+      await request(instancePath('selfTestReply'),{method:'PUT',data:input});
+      const data=await request(instancePath('selfTestReply'));
+      if(data.enabled!==input.enabled||data.automaticFaq!==(input.enabled&&input.automaticFaq))throw new ServiceError('本人測試設定讀回不相符，尚未開啟回覆。',502);
+      const provider=createEvolution({...waSecret,fetchImpl});
+      const result=engine.setSelfTestReplyScope({...data,available:true},value=>provider.sendSelfTest(value));
+      return {...result,message:input.enabled?'本人對話回覆測試已開啟；請從手機傳一則新 Hello。舊訊息不會重新回覆。':'本人對話回覆測試已關閉。'};
+    }),
     configureInboxScope:input=>exclusive(async()=>{
       if(!localWhatsAppTest||!runtime||!waSecret)throw new ServiceError('這個服務未提供本機即時收件範圍設定。',409);
       manualTestEnabled=false;inboxReplyEnabled=false;
+      closeSelfReply();
       engine.evolution=createEvolution({...providerConfig,deliveryEnabled:false,fetchImpl});store.revise();
       const includeSelfTests=input?.includeSelfTests===true;
       if(!input||!['test','all_private_text'].includes(input.mode)||input.consent!==true||typeof input.replyToReceived!=='boolean'||(input.includeSelfTests!==undefined&&typeof input.includeSelfTests!=='boolean')||(input.mode==='test'&&(input.replyToReceived||includeSelfTests)))throw new ServiceError('請確認收件範圍、最近來訊回覆及自身文字測試。');
@@ -240,6 +274,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       // checks and unknown provider writes from a previously active session.
       manualTestEnabled = false;
       inboxReplyEnabled = false;
+      closeSelfReply();
       engine.evolution = createEvolution({ ...providerConfig, deliveryEnabled:false, fetchImpl });
       store.revise();
       if (input?.consent !== true || typeof input.number !== 'string') throw new ServiceError('請填寫測試號碼並確認已獲同意。');
@@ -264,6 +299,7 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       // Close the core sender before waiting on a slow or unavailable bridge.
       manualTestEnabled = false;
       inboxReplyEnabled = false;
+      closeSelfReply();
       inboxScope={...inboxScope,mode:'test',consented:false,replyToReceived:false,includeSelfTests:false,supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media']};
       if (runtime) { engine.evolution = createEvolution(); store.revise(); }
       if (localWhatsAppTest && waSecret) {

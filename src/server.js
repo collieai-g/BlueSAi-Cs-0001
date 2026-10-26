@@ -201,6 +201,8 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           if(method==='POST'&&action==='whatsapp-test-recipients')return json(res,200,await workbench.configureTestRecipient(await body(req)));
           if(method==='GET'&&action==='whatsapp-inbox')return json(res,200,await workbench.getInboxScope());
           if(method==='POST'&&action==='whatsapp-inbox')return json(res,200,await workbench.configureInboxScope(await body(req)));
+          if(method==='GET'&&action==='whatsapp-self-test-reply')return json(res,200,await workbench.getSelfTestReply());
+          if(method==='POST'&&action==='whatsapp-self-test-reply')return json(res,200,await workbench.configureSelfTestReply(await body(req)));
           if(method==='DELETE'&&action==='whatsapp'){await workbench.clearWhatsApp();return json(res,200,{ok:true});}
         }
         if (workbench && path === '/api/workbench/conversations' && method === 'GET') return json(res,200,{conversations:store.conversations()});
@@ -259,10 +261,10 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           }
           return json(res, 201, engine.receive({ address, text: string(input.text) }));
         }
-        const conv = path.match(/^\/api\/conversations\/([\w-]+)(?:\/(takeover|resume|reply))?$/);
+        const conv = path.match(/^\/api\/conversations\/([\w-]+)(?:\/(takeover|resume|reply|self-test-reply))?$/);
         if (conv) {
           const id = conv[1]; engine.requireConversation(id);
-          if (method === 'GET' && !conv[2]) return json(res, 200, { conversation: store.conversation(id), messages: store.messages(id), revision:store.value('revision') });
+          if (method === 'GET' && !conv[2]) return json(res, 200, { conversation: store.conversation(id), selfTestReply:engine.selfTestReplyStatus(store.conversation(id)), messages: store.messages(id), revision:store.value('revision') });
           if (method === 'DELETE' && !conv[2]) {
             if (store.get("SELECT id FROM messages WHERE conversation_id=? AND status='sending'", id)) throw new ServiceError('仍有訊息正在發送，請稍後再刪除。',409);
             if (engine.running) throw new ServiceError('正在處理訊息，請稍後再刪除。',409);
@@ -273,6 +275,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
             engine.takeover(id, conv[2] === 'resume' ? 'ai' : 'human'); return json(res, 200, { ok: true });
           }
           if (method === 'POST' && conv[2] === 'reply') return json(res, 201, { id: engine.manualReply(id, string((await body(req)).text)) });
+          if (method === 'POST' && conv[2] === 'self-test-reply') return json(res,201,engine.manualSelfTestReply(id,await body(req)));
         }
         const approval = path.match(/^\/api\/messages\/([\w-]+)\/approve$/);
         if (approval && method === 'POST') { const input = await body(req); engine.approve(approval[1], string(input.text,4000,false)); return json(res,200,{ok:true}); }

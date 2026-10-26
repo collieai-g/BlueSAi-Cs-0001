@@ -18,6 +18,8 @@ export class Engine {
     this.now = now; this.responseTimeoutMs = responseTimeoutMs; this.deadlinePollMs = deadlinePollMs;
     this.running = false; this.dispatching = false; this.stopping = false; this.webChatEnabled = false;
     this.generation = null;
+    this.selfReply = { available:false,enabled:false,automaticFaq:false,grantId:null,requiresNewMessage:true };
+    this.selfReplySender = null;
     this.watchStore();
     store.recover();
     for (const m of store.all("SELECT id FROM messages WHERE provider_id IS NOT NULL AND provider_instance IS NOT NULL AND role IN ('assistant','staff')")) this.reconcileReceipts(m.id);
@@ -27,6 +29,86 @@ export class Engine {
     const c = this.store.conversation(id);
     if (!c) throw new ServiceError('找不到對話。', 404);
     return c;
+  }
+  setSelfTestReplyScope(scope,send) {
+    if(!scope||typeof scope.enabled!=='boolean'||typeof scope.automaticFaq!=='boolean'||
+      (scope.enabled&&(typeof scope.grantId!=='string'||!/^[\w-]{16,100}$/.test(scope.grantId)||typeof send!=='function')))throw new ServiceError('本人對話測試授權未能核對。',502);
+    const next={available:scope.available===true,enabled:scope.enabled,automaticFaq:scope.enabled&&scope.automaticFaq,
+      grantId:scope.enabled?scope.grantId:null,requiresNewMessage:true};
+    const changed=JSON.stringify(next)!==JSON.stringify(this.selfReply);
+    try{
+      if(changed)this.store.transaction(()=>{
+        for(const c of this.store.all("SELECT id FROM conversations WHERE channel='whatsapp_self_test'")){
+          this.invalidate(c.id);this.store.run("UPDATE conversations SET state='self_test',name='WhatsApp 本人對話測試' WHERE id=?",c.id);
+        }
+        this.store.audit('self_test_reply_scope_changed',scope.enabled?'enabled':'disabled');
+      });
+    }catch(error){
+      if(!next.enabled){this.selfReply=next;this.selfReplySender=null;}
+      throw error;
+    }
+    this.selfReply=next;this.selfReplySender=scope.enabled?send:null;
+    return {...this.selfReply};
+  }
+  selfTestReplyStatus(c) {
+    const scope=this.selfReply;
+    if(!c||c.channel!=='whatsapp_self_test')return {...scope,eligible:false};
+    const input=this.store.get(`SELECT m.id,m.provider_id,s.grant_id FROM messages m LEFT JOIN self_test_reply_links s ON s.message_id=m.id
+      WHERE m.conversation_id=? AND m.role='user' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1`,c.id);
+    const eligible=Boolean(scope.enabled&&input?.provider_id&&input.grant_id===scope.grantId&&
+      this.now()>=c.last_customer_at&&this.now()-c.last_customer_at<86400000);
+    return {...scope,eligible};
+  }
+  answerSelfTest(c,inputId) {
+    const scope=this.selfTestReplyStatus(c),policy=this.inboxPolicy();
+    if(!scope.eligible||c.state!=='self_auto'||!scope.automaticFaq||!policy.enabled||!policy.automaticKnowledge)return;
+    const input=this.store.get('SELECT * FROM messages WHERE id=?',inputId);
+    if(!input||/退款|退貨|refund|例外|exception|真人|人工|投訴/iu.test(input.content))return;
+    const matches=this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
+      WHERE r.normalized_question=? AND k.approved=1 AND (k.expires_at IS NULL OR k.expires_at>?)`,normalizeFaqQuestion(input.content),this.now());
+    if(matches.length!==1||matches[0].category==='refund'||matches[0].category==='style'||
+      this.store.get("SELECT message_id FROM self_test_reply_links WHERE input_message_id=? AND grant_id=? AND kind='faq'",input.id,scope.grantId))return;
+    const messageId=this.store.addMessage(c.id,'assistant',matches[0].content,{status:'queued',sources:[matches[0].id],decision:'answer',engine:'self-test-knowledge'});
+    this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,input.id,scope.grantId,input.provider_id,'faq','self-faq-'+input.id);
+    this.store.audit('self_test_faq_queued',messageId);
+  }
+  manualSelfTestReply(id,input) {
+    const c=this.requireConversation(id),text=typeof input?.text==='string'?input.text.trim():'';
+    if(c.channel!=='whatsapp_self_test'||!text||text.length>1500||typeof input.operationId!=='string'||!/^[\w-]{8,100}$/.test(input.operationId)||!Number.isSafeInteger(input.expectedVersion))throw new ServiceError('請核對本人測試對話、版本及回覆內容。');
+    const previous=this.store.get(`SELECT m.id,m.conversation_id,m.content,m.status FROM self_test_reply_links s JOIN messages m ON m.id=s.message_id WHERE s.operation_id=?`,input.operationId);
+    if(previous){if(previous.conversation_id!==id||previous.content!==text)throw new ServiceError('同一測試操作不能改為另一段回覆。',409);return {messageId:previous.id,operationId:input.operationId,status:previous.status,selfTest:true,sent:['accepted','delivered','read'].includes(previous.status)};}
+    const scope=this.selfTestReplyStatus(c);
+    if(!scope.eligible)throw new ServiceError('請先開啟本人對話回覆測試，再從手機傳一則新文字。',409);
+    if(c.version!==input.expectedVersion)throw new ServiceError('本人對話已更新，請先讀取最新訊息再發送。',409);
+    const last=this.store.get("SELECT * FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1",id);
+    if(this.store.get("SELECT COUNT(*) n FROM messages WHERE conversation_id=? AND role='staff' AND created_at>?",id,Date.now()-60000).n>=5)throw new ServiceError('本人測試回覆太頻密，請稍後再試。',429);
+    return this.store.transaction(()=>{
+      this.invalidate(id);this.store.run("UPDATE conversations SET state='self_human' WHERE id=?",id);
+      const messageId=this.store.addMessage(id,'staff',text,{status:'queued',engine:'self-test-manual',decision:'test_reply'});
+      this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,last.id,scope.grantId,last.provider_id,'manual',input.operationId);
+      this.store.audit('self_test_manual_queued',messageId);
+      return {messageId,operationId:input.operationId,status:'queued',selfTest:true,sent:false};
+    });
+  }
+  async dispatchSelfTest(m,c) {
+    const link=this.store.get('SELECT * FROM self_test_reply_links WHERE message_id=?',m.id),scope=this.selfTestReplyStatus(c);
+    const facts=new Map(this.store.facts(this.now()).map(f=>[f.id,f]));
+    const sources=JSON.parse(m.sources),policy=this.inboxPolicy();
+    const sourceOkay=m.role==='staff'||(sources.length>0&&sources.every(id=>facts.has(id)&&!['refund','style'].includes(facts.get(id).category)));
+    const stateOkay=m.role==='staff'?c.state==='self_human':c.state==='self_auto'&&scope.automaticFaq&&policy.enabled&&policy.automaticKnowledge;
+    if(!scope.eligible||!link||link.grant_id!==scope.grantId||!stateOkay||!sourceOkay||m.version!==c.version||m.config_version!==this.store.value('revision')||!this.selfReplySender){
+      this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);return;
+    }
+    this.store.run("UPDATE messages SET status='sending' WHERE id=? AND status='queued'",m.id);
+    try{
+      const result=await this.selfReplySender({text:m.content,grantId:scope.grantId,replyToId:link.request_provider_id,operationId:link.operation_id,linkPreview:false});
+      if(typeof result?.providerId!=='string'||!result.providerId)throw new Error('SELF_REPLY_RESULT_UNKNOWN');
+      this.store.run("UPDATE messages SET status='accepted',provider_id=?,provider_instance=? WHERE id=?",result.providerId,this.evolution.instance,m.id);
+      this.reconcileReceipts(m.id);this.store.audit('self_test_reply_accepted',m.id);
+    }catch{
+      this.store.run("UPDATE messages SET status='uncertain' WHERE id=?",m.id);this.store.audit('self_test_reply_uncertain',m.id);
+      if(this.selfReply.grantId===scope.grantId)this.setSelfTestReplyScope({available:scope.available,enabled:false,automaticFaq:false});
+    }
   }
   get agent() { return this._agent; }
   set agent(next) {
@@ -87,7 +169,7 @@ export class Engine {
       ORDER BY h.created_at DESC LIMIT 200`).map(row=>({id:row.id,conversationId:row.conversation_id,reason:row.reason,createdAt:row.created_at}));
     const pendingCount = this.store.get(`SELECT COUNT(DISTINCT h.conversation_id) AS n FROM handoff_tasks h
       JOIN conversations c ON c.id=h.conversation_id WHERE h.status='pending' AND c.state IN ('waiting','human')`).n;
-    return { policy: this.inboxPolicy(), pendingCount, pending, hasMore: pendingCount > pending.length,
+    return { policy: this.inboxPolicy(), selfTestReply:{...this.selfReply}, pendingCount, pending, hasMore: pendingCount > pending.length,
       notification: { scope: 'local_card', externalNotified: false } };
   }
   configureInbox(input) {
@@ -200,7 +282,10 @@ export class Engine {
   }
   takeover(id, state = 'human') {
     const conversation = this.requireConversation(id);
-    if (conversation.channel === 'whatsapp_self_test') throw new ServiceError('WhatsApp 自傳測試只供讀取，不提供接手、回覆或交回自動處理。',409);
+    if (conversation.channel === 'whatsapp_self_test') {
+      if(!this.selfTestReplyStatus(conversation).eligible)throw new ServiceError('請先開啟本人對話回覆測試，並從手機傳一則新文字。',409);
+      return this.store.transaction(()=>{this.invalidate(id);this.store.run('UPDATE conversations SET state=? WHERE id=?',state==='ai'?'self_auto':'self_human',id);this.store.audit('self_test_control_changed',id);});
+    }
     this.store.transaction(() => {
       this.invalidate(id);
       this.closeWindow(id, 'cancelled', state === 'ai' ? 'resume' : 'manual_takeover');
@@ -254,7 +339,7 @@ export class Engine {
       return { conversationId: c.id, messageId: id, duplicate: false };
     });
   }
-  receiveSelfTest({address,eventId,text,timestamp}) {
+  receiveSelfTest({address,eventId,text,timestamp,replyGrantId=null}) {
     if (typeof address !== 'string' || !/^[1-9]\d{7,14}@s\.whatsapp\.net$/.test(address) ||
         typeof eventId !== 'string' || !eventId || eventId.length > 300 || typeof text !== 'string' || !text.trim() || text.length > 4000 ||
         !Number.isFinite(timestamp) || timestamp < this.now()-300000 || timestamp > this.now()+60000) throw new ServiceError('自傳測試訊息無效。');
@@ -270,9 +355,15 @@ export class Engine {
         c = this.store.conversation(id);
       }
       this.invalidate(c.id);
-      this.store.run("UPDATE conversations SET state='self_test',name='WhatsApp 自傳測試（只讀）' WHERE id=?",c.id);
+      const eligible=this.selfReply.enabled&&replyGrantId===this.selfReply.grantId;
+      const nextState=eligible?(c.state==='self_human'?'self_human':'self_auto'):'self_test';
+      this.store.run("UPDATE conversations SET state=?,name=?,last_customer_at=MAX(last_customer_at,?) WHERE id=?",nextState,eligible?'WhatsApp 本人對話測試':'WhatsApp 自傳測試（只讀）',eligible?Math.min(timestamp,this.now()):0,c.id);
       const messageId=this.store.addMessage(c.id,'user',text,{status:'received',providerId:eventId,
         providerInstance:this.evolution.instance || null,engine:'whatsapp-self-test',decision:'test_only'});
+      if(eligible){
+        this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,null,replyGrantId,eventId,'input',null);
+        this.answerSelfTest(this.store.conversation(c.id),messageId);
+      }
       this.store.audit('whatsapp_self_test_received',c.id);
       return {conversationId:c.id,messageId,duplicate:false,selfTest:true,customerAcceptance:false};
     });
@@ -297,17 +388,18 @@ export class Engine {
     return this.store.transaction(() => {
       const now = this.now();
       const result = this.store.run('INSERT OR IGNORE INTO provider_receipts VALUES (?,?,?,?,?)', instance, providerId, address, status, now);
-      this.store.run(`INSERT INTO channel_activity(instance,last_receipt_at) VALUES (?,?)
+      const selfTest=receipt.selfTest===true||Boolean(this.store.get("SELECT id FROM conversations WHERE channel='whatsapp_self_test' AND address=?",address));
+      if(!selfTest)this.store.run(`INSERT INTO channel_activity(instance,last_receipt_at) VALUES (?,?)
         ON CONFLICT(instance) DO UPDATE SET last_receipt_at=excluded.last_receipt_at`, instance, now);
       const message = this.store.get(`SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id
-        WHERE m.provider_instance=? AND m.provider_id=? AND c.channel='evolution' AND c.address=? AND m.role IN ('assistant','staff')`, instance, providerId, address);
+        WHERE m.provider_instance=? AND m.provider_id=? AND c.channel IN ('evolution','whatsapp_self_test') AND c.address=? AND m.role IN ('assistant','staff')`, instance, providerId, address);
       if (message) this.reconcileReceipts(message.id);
       return { duplicate: result.changes === 0, matched: Boolean(message) };
     });
   }
   reconcileReceipts(messageId) {
     const m = this.store.get(`SELECT m.*,c.address,c.channel FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?`, messageId);
-    if (!m || m.channel !== 'evolution' || !m.provider_id || !m.provider_instance || !['assistant','staff'].includes(m.role)) return;
+    if (!m || !['evolution','whatsapp_self_test'].includes(m.channel) || !m.provider_id || !m.provider_instance || !['assistant','staff'].includes(m.role)) return;
     // A late SERVER_ACK or ERROR must never erase observed delivery/read evidence.
     const rank = { sending: 0, uncertain: 0, accepted: 1, failed: 2, delivered: 3, read: 4 };
     if (!(m.status in rank)) return;
@@ -450,8 +542,7 @@ export class Engine {
     if (!m || m.status !== 'queued') return;
     const c = this.store.conversation(m.conversation_id);
     if (c?.channel === 'whatsapp_self_test') {
-      this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);
-      this.store.audit('whatsapp_self_test_send_blocked',m.id);return;
+      return this.dispatchSelfTest(m,c);
     }
     const stateOkay = m.role === 'staff' ? c?.state === 'human' : c?.state === 'ai';
     const policy=this.inboxPolicy();

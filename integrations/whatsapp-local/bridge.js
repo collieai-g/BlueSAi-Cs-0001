@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,7 +95,11 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     CREATE TABLE IF NOT EXISTS callback_outbox(id TEXT PRIMARY KEY,event_key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS local_sends(id TEXT PRIMARY KEY,address TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS observed_inbox_contacts(address TEXT PRIMARY KEY,account TEXT NOT NULL,last_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS observed_message_events(event_key TEXT PRIMARY KEY,created_at INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS observed_message_events(event_key TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS self_test_inputs(request_id TEXT NOT NULL,account TEXT NOT NULL,address TEXT NOT NULL,grant_id TEXT NOT NULL,timestamp INTEGER NOT NULL,observed_at INTEGER NOT NULL,PRIMARY KEY(request_id,account,address));
+    CREATE TABLE IF NOT EXISTS self_test_operations(operation_id TEXT PRIMARY KEY,account TEXT NOT NULL,address TEXT NOT NULL,grant_id TEXT NOT NULL,request_id TEXT NOT NULL,text_hash TEXT NOT NULL,state TEXT NOT NULL,send_id TEXT NOT NULL,provider_id TEXT,created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS local_send_aliases(alias_id TEXT PRIMARY KEY,send_id TEXT NOT NULL,address TEXT NOT NULL);`);
+  db.prepare("UPDATE self_test_operations SET state='uncertain' WHERE state='sending'").run();
   const config=key=>{const r=db.prepare('SELECT value FROM bridge_config WHERE key=?').get(key);return r?JSON.parse(r.value):null;};
   const setConfig=(key,value)=>db.prepare('INSERT INTO bridge_config VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value));
   const identity={instance,callback:webhookUrl||''};
@@ -115,6 +119,9 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   let webhookEnabled=Boolean(expectedWebhook&&config('webhook_enabled'));
   let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
   let ignored=0,reconnectAttempt=0,sendsThisMinute=0,sendWindow=now(),mappingState='not_requested',mappingGeneration=0,testChanging=false,scopeChanging=0,scopeBaseline=null;
+  // Reply authority is deliberately process-local. Stored inputs/operations and
+  // send IDs survive restart, but none can reopen a grant or retry a send.
+  let selfReply=null,selfReplyGeneration=0,selfInFlight=false,selfHeld=[],selfSendsThisMinute=0,selfSendWindow=now();
   // Process-local metadata only: never retain message text, keys, names, JIDs,
   // phone numbers, QR material or provider exception strings in diagnostics.
   const diagnostics={scope:'process',startedAt:now(),upserts:{events:0,notify:0,append:0,other:0,requestId:0,messageCount:0,lastAt:null},
@@ -123,15 +130,35 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   const receiveDiagnostics=()=>({...diagnostics,upserts:{...diagnostics.upserts},rejected:{...diagnostics.rejected},queued:{...diagnostics.queued},callbacks:{...diagnostics.callbacks},lastRejection:{...diagnostics.lastRejection}});
   function reject(reason,count=1){diagnostics.rejected[reason]+=count;diagnostics.lastRejection={reason,at:now()};}
   const inboxScope=()=>{if(inboxMode==='all_private_text'&&state==='open')inboxAccountValid();return {mode:inboxMode,consented:inboxMode==='all_private_text',includeSelfTests,supported:['new_private_text',...(includeSelfTests?['self_test_text']:[])],excluded:['history','groups','broadcasts',...(includeSelfTests?[]:['self_messages']),'media'],sendingScope:'test_allowlist',replyScope:'recent_incoming_only',replyToReceived:inboxReplyEnabled,deliveryEnabled:inboxReplyEnabled};};
-  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
+  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
   const scoped=address=>recipients.includes(address.split('@')[0]);
   const inboundScoped=address=>phoneJid.test(address)&&(inboxMode==='all_private_text'?inboxAccountValid():scoped(address));
   function inboxAccountValid(){
     if(inboxMode!=='all_private_text'||state!=='open')return false;
     if(inboxAccount&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===inboxAccount)return true;
-    inboxMode='test';inboxAccount=null;inboxConsentedAt=null;includeSelfTests=false;selfTestConsentedAt=null;scopeBaseline=null;inboxGeneration++;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
+    closeSelfReply();inboxMode='test';inboxAccount=null;inboxConsentedAt=null;includeSelfTests=false;selfTestConsentedAt=null;scopeBaseline=null;inboxGeneration++;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
     setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});lastReason='inbox_account_changed';purgeOutOfScope();
     return false;
+  }
+  function closeSelfReply(){
+    selfReply=null;selfReplyGeneration++;
+    // A callback already waiting for the core must not carry obsolete authority.
+    for(const row of db.prepare('SELECT id,payload FROM callback_outbox').all()){
+      let payload;try{payload=JSON.parse(row.payload);}catch{continue;}
+      if(payload.data?.localSelfTest===true&&payload.data.selfReplyGrantId){payload.data.selfReplyGrantId=null;db.prepare('UPDATE callback_outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),row.id);}
+    }
+  }
+  function selfReplyValid(){
+    if(!selfReply)return false;
+    if(!includeSelfTests||!inboxAccountValid()||selfReply.account!==inboxAccount){closeSelfReply();return false;}
+    return true;
+  }
+  function selfReplyStatus(){return {enabled:selfReplyValid(),automaticFaq:selfReply?.automaticFaq===true,grantId:selfReply?.grantId||null,available:true,requiresNewMessage:true};}
+  function findLocalSend(id){
+    if(typeof id!=='string')return null;
+    const direct=db.prepare('SELECT id,address FROM local_sends WHERE id=?').get(id);
+    const sent=direct||db.prepare('SELECT s.id,s.address FROM local_send_aliases a JOIN local_sends s ON s.id=a.send_id WHERE a.alias_id=? AND a.address=s.address').get(id);
+    return sent?{...sent,selfReply:Boolean(db.prepare('SELECT operation_id FROM self_test_operations WHERE send_id=?').get(sent.id))}:null;
   }
   const recentIncoming=address=>{
     const account=resolveLinkedPhone(socket,linkedAuthState,normalizeJid);
@@ -151,7 +178,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     if(payload.event==='messages.upsert'&&payload.data?.key?.fromMe===false)return inboundScoped(address);
     if(payload.event==='messages.upsert'&&payload.data?.key?.fromMe===true&&inboxMode==='all_private_text')return inboxAccountValid()&&recentIncoming(address);
     if(payload.event==='messages.update'&&typeof payload.data?.keyId==='string'){
-      const sent=db.prepare('SELECT address FROM local_sends WHERE id=?').get(payload.data.keyId);
+      const sent=findLocalSend(payload.data.keyId);
       if(sent?.address===address)return true;
     }
     return scoped(address);
@@ -187,7 +214,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   }
   async function phoneAddress(key,{knownSend=false}={}) {
     const direct=resolvePhoneAddress(key,normalizeJid);
-    const stored=knownSend&&typeof key?.id==='string'?db.prepare('SELECT address FROM local_sends WHERE id=?').get(key.id):null;
+    const stored=knownSend&&typeof key?.id==='string'?findLocalSend(key.id):null;
     if(direct)return stored&&stored.address!==direct?null:direct;
     if(typeof key?.remoteJid!=='string'||!/^\d+@lid$/.test(normalizeJid(key.remoteJid)))return null;
     // Direct delivery receipts may omit remoteJidAlt. A known random outgoing ID
@@ -208,16 +235,29 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     }
     return null;
   }
-  function queue(event,eventKey,data,sourceScope) {
+  function queue(event,eventKey,data,sourceScope,observedAt=now()) {
     const payload={event,instance,data,...(sourceScope==='all_private_text'?{sourceScope}: {})};
     const insert=()=>db.prepare('INSERT OR IGNORE INTO callback_outbox(id,event_key,payload,next_at,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),eventKey,JSON.stringify(payload),now(),now()).changes>0;
     if(event!=='messages.upsert')return insert();
     db.exec('BEGIN IMMEDIATE');
     try{
       const unseen=db.prepare('INSERT OR IGNORE INTO observed_message_events VALUES (?,?)').run(eventKey,now()).changes>0;
-      const added=unseen&&insert();db.exec('COMMIT');return added;
+      const added=unseen&&insert();
+      if(added&&data.localSelfTest===true&&typeof data.selfReplyGrantId==='string'&&selfReplyValid()&&data.selfReplyGrantId===selfReply.grantId){
+        db.prepare('INSERT OR IGNORE INTO self_test_inputs VALUES (?,?,?,?,?,?)').run(data.key.id,selfReply.account,data.key.remoteJid,selfReply.grantId,Math.min(now(),Number(data.messageTimestamp)*1000),observedAt);
+      }
+      db.exec('COMMIT');return added;
     }catch(error){db.exec('ROLLBACK');throw error;}
   }
+  function queueSelf(item,readonly=false){
+    if(stopped||item.epoch!==epoch||item.inboxGeneration!==inboxGeneration||!includeSelfTests||!inboxAccountValid()||item.address!==inboxAccount+'@s.whatsapp.net')return;
+    const known=findLocalSend(item.id);
+    if(known?.address===item.address){reject('knownEcho');return;}
+    const grant=!readonly&&item.replyGeneration===selfReplyGeneration&&selfReplyValid()&&item.replyGrantId===selfReply.grantId&&item.observedAt>=selfReply.at&&item.seconds>=Math.floor(selfReply.at/1000)?selfReply.grantId:null;
+    const inserted=queue('messages.upsert',`self-test:${item.id}`,{key:{id:item.id,remoteJid:item.address,fromMe:item.fromMe},messageTimestamp:item.seconds,message:{conversation:item.content},pushName:item.pushName,localSelfTest:true,selfReplyGrantId:grant},'all_private_text',item.observedAt);
+    if(inserted){diagnostics.queued.selfTest++;diagnostics.queued.lastAt=now();}else diagnostics.queued.duplicate++;
+  }
+  function drainSelfHeld(readonly=false){const held=selfHeld;selfHeld=[];for(const item of held)queueSelf(item,readonly);}
   async function flush() {
     if(stopped||flushBusy||scopeChanging||!webhookEnabled||!expectedWebhook)return;
     flushBusy=true;
@@ -254,37 +294,43 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     if(inboxMode==='all_private_text'&&!inboxAccountValid()){ignored+=count;reject('scopeClosed',count);return;}
     if(inboxMode==='test'&&!recipients.length){ignored+=count;reject('outOfScope',count);return;}
     const receivedGeneration=inboxGeneration;
+    const receivedReplyGeneration=selfReplyGeneration,receivedReplyGrant=selfReply?.grantId||null,observedAt=now();
     for(const message of event.messages){
       if(!object(message)){reject('invalidKey');continue;}
       const id=message.key?.id,fromMe=message.key?.fromMe;
       if(typeof id!=='string'||!id||id.length>300||typeof fromMe!=='boolean'){reject('invalidKey');continue;}
-      // Known bot echoes never masquerade as a phone-side human takeover.
-      if(fromMe&&db.prepare('SELECT id FROM local_sends WHERE id=?').get(id)){reject('knownEcho');continue;}
       const seconds=Number(message.messageTimestamp);
       // Validate freshness and text before resolving the identity of an arrival.
       const consentedAt=inboxMode==='all_private_text'?inboxConsentedAt:testConsentedAt;
       if(!Number.isFinite(seconds)||seconds*1000<now()-300000||seconds*1000>now()+60000||seconds<Math.floor(consentedAt/1000)){reject('stale');continue;}
       const content=plainText(message.message);
       if(typeof content!=='string'||!content.trim()||content.length>4000){ignored++;reject(typeof content==='string'&&content.length>4000?'oversize':'nonText');continue;}
-      const address=await phoneAddress(message.key);
+      const address=await phoneAddress(message.key,{knownSend:Boolean(findLocalSend(id))});
       if(stopped||expectedEpoch!==epoch||receivedGeneration!==inboxGeneration){reject('contextChanged');return;}
       if(!address){ignored++;reject('unmapped');continue;}
+      if(findLocalSend(id)?.address===address){reject('knownEcho');continue;}
       const ownAddress=inboxMode==='all_private_text'&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===address.split('@')[0];
       const localSelfTest=ownAddress&&includeSelfTests&&inboxAccountValid();
       if(ownAddress&&!localSelfTest){ignored++;reject('self');continue;}
       if(localSelfTest&&seconds<Math.floor(selfTestConsentedAt/1000)){reject('stale');continue;}
+      if(localSelfTest){
+        const item={id,address,fromMe,seconds,content,pushName:typeof message.pushName==='string'?message.pushName.slice(0,100):'WhatsApp 自傳測試',epoch:expectedEpoch,inboxGeneration:receivedGeneration,replyGeneration:receivedReplyGeneration,replyGrantId:receivedReplyGrant,observedAt};
+        if(selfInFlight&&selfInFlight.epoch===epoch){if(selfHeld.length>=32){closeSelfReply();drainSelfHeld(true);}selfHeld.push(item);}
+        else queueSelf(item);
+        continue;
+      }
       if(!localSelfTest&&(fromMe===false?!inboundScoped(address):inboxMode==='all_private_text'?!(inboxAccountValid()&&recentIncoming(address)):!scoped(address))){ignored++;reject('outOfScope');continue;}
       if(!fromMe&&!localSelfTest){
         const account=resolveLinkedPhone(socket,linkedAuthState,normalizeJid);
         if(account)db.prepare('INSERT INTO observed_inbox_contacts(address,account,last_at) VALUES (?,?,?) ON CONFLICT(address) DO UPDATE SET account=excluded.account,last_at=CASE WHEN account=excluded.account THEN MAX(last_at,excluded.last_at) ELSE excluded.last_at END').run(address,account,Math.min(now(),seconds*1000));
       }
-      const inserted=queue('messages.upsert',`${localSelfTest?'self-test':'message'}:${id}`,{key:{id,remoteJid:address,fromMe},messageTimestamp:seconds,message:{conversation:content},pushName:typeof message.pushName==='string'?message.pushName.slice(0,100):'WhatsApp 來訊',...(localSelfTest?{localSelfTest:true}:{})},inboxMode);
-      if(inserted){diagnostics.queued[localSelfTest?'selfTest':fromMe?'outgoing':'incoming']++;diagnostics.queued.lastAt=now();}else diagnostics.queued.duplicate++;
+      const inserted=queue('messages.upsert',`message:${id}`,{key:{id,remoteJid:address,fromMe},messageTimestamp:seconds,message:{conversation:content},pushName:typeof message.pushName==='string'?message.pushName.slice(0,100):'WhatsApp 來訊'},inboxMode);
+      if(inserted){diagnostics.queued[fromMe?'outgoing':'incoming']++;diagnostics.queued.lastAt=now();}else diagnostics.queued.duplicate++;
     }
   }
   async function onUpdates(updates,expectedEpoch) {
     if(!Array.isArray(updates))return;
-    for(const item of updates){if(item.key?.fromMe!==true)continue;const address=await phoneAddress(item.key,{knownSend:true}),id=item.key?.id,status=statusNames[item.update?.status];if(stopped||expectedEpoch!==epoch)return;if(!address||typeof id!=='string'||!id||!status)continue;const sent=db.prepare('SELECT address FROM local_sends WHERE id=?').get(id);if(!scoped(address)&&sent?.address!==address)continue;queue('messages.update',`receipt:${id}:${status}`,{keyId:id,remoteJid:address,fromMe:true,status});}
+    for(const item of updates){const known=findLocalSend(item.key?.id);if(item.key?.fromMe!==true&&!(item.key?.fromMe===false&&known?.selfReply))continue;const address=await phoneAddress(item.key,{knownSend:true}),id=item.key?.id,status=statusNames[item.update?.status];if(stopped||expectedEpoch!==epoch)return;if(!address||typeof id!=='string'||!id||!status)continue;const sent=findLocalSend(id);if(!scoped(address)&&sent?.address!==address)continue;queue('messages.update',`receipt:${id}:${status}`,{keyId:id,remoteJid:address,fromMe:true,status,...(sent?.selfReply?{localSelfReply:true}:{})});}
   }
   function onReceipt(updates,expectedEpoch) {
     if(!Array.isArray(updates))return;
@@ -306,7 +352,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       // reach that canonicalizer; final forwarding still requires verified PN.
       const candidate=makeSocket({auth:auth.state,logger,markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,shouldIgnoreJid:jid=>{const value=normalizeJid(jid);return !phoneJid.test(value)&&!/^\d+@lid$/.test(value)&&!/^([1-9]\d{7,14})@hosted$/.test(value)&&!/^\d+@hosted\.lid$/.test(value);},getMessage:async()=>undefined});
       socket=candidate;
-      candidate.ev.on('creds.update',()=>{if(current!==epoch||stopped)return;saveChain=saveChain.then(()=>auth.saveCreds()).catch(()=>{if(current!==epoch||stopped)return;lastReason='credential_save_failed';state='close';sendEnabled=false;inboxReplyEnabled=false;candidate.end(new Error('credential_save_failed'));});});
+      candidate.ev.on('creds.update',()=>{if(current!==epoch||stopped)return;saveChain=saveChain.then(()=>auth.saveCreds()).catch(()=>{if(current!==epoch||stopped)return;closeSelfReply();lastReason='credential_save_failed';state='close';sendEnabled=false;inboxReplyEnabled=false;candidate.end(new Error('credential_save_failed'));});});
       candidate.ev.on('messages.upsert',event=>{if(current===epoch&&!stopped)onMessages(event,current).catch(()=>{lastReason='incoming_mapping_failed';});});
       candidate.ev.on('messages.update',event=>{if(current===epoch&&!stopped)onUpdates(event,current).catch(()=>{lastReason='receipt_mapping_failed';});});
       candidate.ev.on('message-receipt.update',event=>{if(current===epoch&&!stopped)onReceipt(event,current)?.catch(()=>{lastReason='receipt_mapping_failed';});});
@@ -318,7 +364,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         }
         if(update.connection==='open'){state='open';qr=null;qrAt=0;reconnectAttempt=0;if(inboxMode==='all_private_text')inboxAccountValid();if(recipients.length)prepareMappings(recipients).catch(error=>{if(error.stale||current!==epoch||stopped||state!=='open'||socket!==candidate)return;sendEnabled=false;lastReason='recipient_mapping_unresolved';});}
         if(update.connection==='close'){
-          state='close';qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
+          closeSelfReply();state='close';qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
           const code=update.lastDisconnect?.error?.output?.statusCode;
           lastReason=code===401?'logged_out':code===403?'account_not_available':'connection_closed';
           if([401,403].includes(code)){sendEnabled=false;return;}
@@ -336,6 +382,20 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(req.method==='GET'&&path==='/healthz')return json(res,200,{status:'ok',provider:'baileys-local'});
       if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers.apikey,apiKey))throw fail('未獲授權。',401);
       if(path===`/instance/connectionState/${instance}`&&req.method==='GET')return json(res,200,status());
+      if(path===`/instance/selfTestReply/${instance}`){
+        if(req.method==='GET')return json(res,200,selfReplyStatus());
+        if(req.method==='PUT'){
+          closeSelfReply();const generation=selfReplyGeneration;
+          const input=await body(req);
+          if(generation!==selfReplyGeneration)throw fail('自身測試授權已改變，請重新核對。',409);
+          if(Object.keys(input).some(key=>!['enabled','automaticFaq','consent'].includes(key))||typeof input.enabled!=='boolean'||typeof input.automaticFaq!=='boolean'||input.consent!==true)throw fail('請明確確認本人測試及知識庫自動回覆。',409);
+          if(input.enabled){
+            if(scopeChanging||!includeSelfTests||!inboxAccountValid()||!webhookEnabled||(selfInFlight&&selfInFlight.epoch===epoch))throw fail('請先核對連結帳戶、自傳收件及收件網址；進行中的發送須先完成。',409);
+            selfReply={account:inboxAccount,grantId:randomUUID(),automaticFaq:input.automaticFaq,at:now()};
+          }
+          return json(res,200,selfReplyStatus());
+        }
+      }
       if(path===`/instance/connect/${instance}`&&req.method==='GET'){
         await connect();const until=Date.now()+qrWaitMs;
         while(state==='connecting'&&!(qr&&now()-qrAt<20000)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));
@@ -344,6 +404,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(path===`/instance/inboxScope/${instance}`){
         if(req.method==='GET')return json(res,200,inboxScope());
         if(req.method==='PUT'){
+          closeSelfReply();
           const previousConsent=scopeChanging?scopeBaseline:inboxMode==='all_private_text'&&inboxAccountValid()?{account:inboxAccount,at:inboxConsentedAt,includeSelfTests,selfTestConsentedAt}:null;
           if(!scopeChanging)scopeBaseline=previousConsent;
           scopeChanging++;let committedGeneration=null;
@@ -379,6 +440,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(path===`/instance/testRecipients/${instance}`){
         if(req.method==='GET')return json(res,200,status().testMode);
         if(req.method==='PUT'){
+          closeSelfReply();
           // "Only these test phones" revokes broad reception as well as sending,
           // including malformed/failed writes and concurrent reconfiguration.
           sendEnabled=false;inboxReplyEnabled=false;inboxMode='test';inboxAccount=null;inboxConsentedAt=null;includeSelfTests=false;selfTestConsentedAt=null;scopeBaseline=null;mappingGeneration++;inboxGeneration++;
@@ -419,9 +481,50 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         db.prepare('INSERT INTO local_sends VALUES (?,?,?,?)').run(id,address,'sending',now());
         try{const result=await socket.sendMessage(address,{text:text.trim(),linkPreview:null},{messageId:id});if(typeof result?.key?.id!=='string'||!result.key.id)throw Error();db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('accepted',id);return json(res,201,{key:{id:result.key.id},status:'accepted'});}catch{db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('uncertain',id);throw fail('發送結果未確認，請先在 WhatsApp 核對，勿直接重發。',502);}
       }
+      if(path===`/message/sendSelfTest/${instance}`&&req.method==='POST'){
+        const input=await body(req);
+        if(Object.keys(input).some(key=>!['text','grantId','replyToId','operationId','linkPreview'].includes(key))||typeof input.text!=='string'||!input.text.trim()||input.text.length>4000||input.linkPreview!==false||typeof input.grantId!=='string'||typeof input.replyToId!=='string'||!input.replyToId||input.replyToId.length>300||typeof input.operationId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(input.operationId))throw fail('本人回覆測試參數無效。');
+        if(scopeChanging||!selfReplyValid()||input.grantId!==selfReply.grantId)throw fail('本人回覆測試尚未授權，或授權已失效。',403);
+        const grant=selfReply,ownAddress=grant.account+'@s.whatsapp.net',text=input.text.trim();
+        const observed=db.prepare('SELECT * FROM self_test_inputs WHERE request_id=? AND account=? AND address=?').get(input.replyToId,grant.account,ownAddress);
+        if(!observed||observed.grant_id!==grant.grantId||observed.observed_at<grant.at||observed.timestamp<Math.floor(grant.at/1000)*1000||now()<observed.timestamp||now()-observed.timestamp>=86400000)throw fail('只可回覆這次授權後實際收到、仍在期限內的本人新文字。',403);
+        const textHash=createHash('sha256').update(text).digest('hex');
+        const previous=db.prepare('SELECT * FROM self_test_operations WHERE operation_id=?').get(input.operationId);
+        if(previous){
+          if(previous.account!==grant.account||previous.address!==ownAddress||previous.grant_id!==grant.grantId||previous.request_id!==input.replyToId||previous.text_hash!==textHash)throw fail('這個發送識別已用於另一項回覆，不能覆寫或重送。',409);
+          if(previous.state==='accepted'&&previous.provider_id)return json(res,201,{key:{id:previous.provider_id},status:'accepted',duplicate:true,selfTest:true});
+          throw fail('這項發送正在處理或結果未確認，請先在 WhatsApp 核對，勿重新發送。',409);
+        }
+        if(selfInFlight&&selfInFlight.epoch===epoch)throw fail('本人測試正在發送，請稍後。',409);
+        if(now()-selfSendWindow>=60000){selfSendWindow=now();selfSendsThisMinute=0;}if(selfSendsThisMinute>=5){closeSelfReply();throw fail('本人測試每分鐘最多五次發送，授權已關閉，請稍後重新核對。',429);}
+        const id=makeMessageId(),flight={epoch},sendSocket=socket;
+        db.exec('BEGIN IMMEDIATE');
+        try{db.prepare('INSERT INTO local_sends VALUES (?,?,?,?)').run(id,ownAddress,'sending',now());db.prepare('INSERT INTO self_test_operations VALUES (?,?,?,?,?,?,?,?,?,?)').run(input.operationId,grant.account,ownAddress,grant.grantId,input.replyToId,textHash,'sending',id,null,now());db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+        selfSendsThisMinute++;selfInFlight=flight;
+        let timeout,late=false,success=false,network;
+        const rememberAlias=result=>{
+          const actual=result?.key?.id;
+          if(typeof actual!=='string'||!actual||actual.length>300)throw Error('invalid_provider_id');
+          const known=findLocalSend(actual);if(known&&known.id!==id)throw Error('provider_id_conflict');
+          if(actual!==id)db.prepare('INSERT INTO local_send_aliases VALUES (?,?,?)').run(actual,id,ownAddress);
+          return actual;
+        };
+        try{
+          network=Promise.resolve(sendSocket.sendMessage(ownAddress,{text,linkPreview:null},{messageId:id}));
+          const result=await Promise.race([network,new Promise((resolve,reject)=>{timeout=setTimeout(()=>{late=true;reject(Error('self_send_timeout'));},10000);})]);
+          const actual=rememberAlias(result);
+          db.prepare("UPDATE local_sends SET state='accepted' WHERE id=?").run(id);
+          db.prepare("UPDATE self_test_operations SET state='accepted',provider_id=? WHERE operation_id=?").run(actual,input.operationId);
+          success=true;return json(res,201,{key:{id:actual},status:'accepted',selfTest:true});
+        }catch{
+          if(selfReply?.grantId===grant.grantId)closeSelfReply();db.prepare("UPDATE local_sends SET state='uncertain' WHERE id=?").run(id);db.prepare("UPDATE self_test_operations SET state='uncertain' WHERE operation_id=?").run(input.operationId);
+          if(late&&network){network.then(result=>{if(!stopped)try{rememberAlias(result);}catch{}}).catch(()=>{}).finally(()=>{if(selfInFlight===flight){selfInFlight=false;if(!stopped)drainSelfHeld(true);}});}
+          throw fail('本人測試發送結果未確認，授權已關閉。請先在 WhatsApp 核對，勿直接重發。',502);
+        }finally{clearTimeout(timeout);if(!late&&selfInFlight===flight){selfInFlight=false;drainSelfHeld(!success);}}
+      }
       throw fail('找不到此操作。',404);
     } catch(error){if(!res.headersSent)json(res,Number.isInteger(error.status)?error.status:500,{error:Number.isInteger(error.status)?error.message:'本機 WhatsApp 接駁暫時未能完成。',...(error.code==='SELF_TEST_RECIPIENT'?{code:'SELF_TEST_RECIPIENT'}:{})});else res.end();}
   });
   server.requestTimeout=15000;server.headersTimeout=10000;
-  return {server,status,flush,async close(){if(stopped)return;stopped=true;epoch++;clearInterval(timer);clearTimeout(retryTimer);socket?.end(new Error('local_service_shutdown'));await saveChain;while(flushBusy)await new Promise(resolve=>setTimeout(resolve,10));if(server.listening)await new Promise(resolve=>server.close(resolve));db.close();}};
+  return {server,status,flush,async close(){if(stopped)return;closeSelfReply();stopped=true;selfHeld=[];epoch++;clearInterval(timer);clearTimeout(retryTimer);socket?.end(new Error('local_service_shutdown'));await saveChain;while(flushBusy)await new Promise(resolve=>setTimeout(resolve,10));if(server.listening)await new Promise(resolve=>server.close(resolve));db.close();}};
 }

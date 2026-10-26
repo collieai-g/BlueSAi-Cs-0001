@@ -18,7 +18,7 @@
 - 上下文只展示目前對話、有效知識來源、處理方式及渠道發送條件；缺項直接連至管理中的相關步驟。自動更新保留各客戶未送出的回覆、草稿編輯、選取及閱讀位置，不搶走焦點。
 - 知識庫答案只在唯一完整問題吻合、答案已批准且仍有效時採用；自動發送另經全域政策及當前渠道授權。DOT 僅讀取本人選定對話，先讀最新版本再保存草稿；採用與發送是另外的明確操作。
 - FAQ-only、原生 Codex CLI 與模型 API 分開呈現。原生 CLI 是本機獨立受限工作，使用既有 ChatGPT 登入及帳戶額度，不控制目前左側聊天，也不代表宿主原生卡片已安裝。接駁測試成功不改政策；aiFallback／automaticAi 預設關閉，有批准來源的 answer 才可按獨立渠道授權自動發送，clarify 留草稿，退款／衝突／無依據／失敗／逾時轉人工。
-- WhatsApp 自傳測試在「連線測試」檢視另列，只供閱讀；不計入客戶待處理、不觸發 FAQ、CLI／API 生成、DOT、人工／自動發送或待處理通知，不當作外部客戶收發驗收。
+- WhatsApp 自傳測試在「連線測試」檢視另列，預設只讀，不計入客戶待處理或通知。另行明確同意的「本人對話回覆測試」以當次帳戶綁定隨機 grant，僅開放新自身文字的 exact-approved FAQ 自動回覆及專用人工回覆，自動 FAQ 另需全域 enabled／automaticKnowledge，不觸發 CLI／API 或 DOT。人工切至 self_human，交回 self_auto 只作用下一筆新來訊；舊 Hello 不重跑。回聲按 ID＋address 攔截，uncertain 自停，重啟／斷線／換帳戶／撤銷關閉授權；不改外部顧客 scope，不作外部收發驗收。見 [SELF_REPLY_TEST.md](SELF_REPLY_TEST.md)。
 
 交互參考為 [Zendesk Agent Workspace 官方說明](https://support.zendesk.com/hc/en-us/articles/4408821259930-About-the-Zendesk-Agent-Workspace/) 及[使用者提供的官方示範](https://www.zendesk.hk/demo/)。只借鑑同頁處理對話、知識及上下文的方式，沿用 Blueprint 視覺與本產品權限；不整合 Zendesk、不複製其素材，也不宣稱具備示範中的全部功能。
 

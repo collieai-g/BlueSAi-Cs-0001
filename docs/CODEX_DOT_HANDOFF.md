@@ -4,7 +4,7 @@
 
 這個階段讓商戶在客服工作台準備任務，再交給目前使用的 Codex／DOT 智能 Agent。沿用已有的登入對話與權限，不要求另一個 DOT 帳戶、模型 API 金鑰或新訂閱。OpenAI API 設定保留為明確選用的其他路線。
 
-此文件描述「管理」內的一般任務與商戶知識快照。收件匣另有綁定所選客戶最新版本的 DOT 草稿流程，見 [LIVE_INBOX.md](LIVE_INBOX.md)；兩者都不直接向客戶發送。自傳連線測試不提供 DOT 草稿操作。
+此文件描述「管理」內的一般任務與商戶知識快照。收件匣另有綁定所選客戶最新版本的 DOT 草稿流程，見 [LIVE_INBOX.md](LIVE_INBOX.md)；兩者都不直接向客戶發送。自傳連線測試及另行開啟的本人對話 FAQ／人工回覆測試均不提供 DOT 草稿操作；後者的獨立授權見 [SELF_REPLY_TEST.md](SELF_REPLY_TEST.md)。
 
 這條本人主動交給目前左側聊天的路線，與新加入的「原生 Codex CLI」不同。CLI fallback 由後台在另行授權後建立獨立 ephemeral 生成工作，使用既有 ChatGPT 登入及帳戶額度，不會呼叫、控制或續接這個聊天。`aiFallback`／`automaticAi` 預設關閉；接駁與真正發送條件見 [安裝與三模式](INSTALL.md#原生-codex-與選用-api)。
 
