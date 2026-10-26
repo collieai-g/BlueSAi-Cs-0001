@@ -2,7 +2,7 @@
 
 單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
 
-本版是 `0.3.0-preview.2` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
+本版是 `0.4.0-preview.1` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
 
 ## 先選交付模式
 
@@ -12,7 +12,7 @@
 | `web-chat` | `requires_setup`：Node 客人會話、受限 API、共用客服核心、收件確認 | 明確開啟 `WEB_CHAT_ENABLED`、HTTPS 客人入口及實際客人收件 |
 | `whatsapp` | `requires_setup`：Evolution 收件、草稿／人工、發送及回報流程 | 指定帳號、掃碼、已驗證 webhook、明確發送設定及實際收件 |
 | 持續 AI | `requires_setup`：獨立服務執行，不依賴管理對話開著 | 可用模型、有效批准知識、持續程序與選定回覆模式 |
-| 完整宿主管理三分頁 | `requires_setup`：已提供 renderer/API 規格 | 宿主真正實作 `bluesai-management/1` 及 `bluesai-management-api/1` |
+| 收件匣／知識庫／管理原生工作區 | `requires_setup`：已提供 renderer/API 規格及受限卡片資產邊界 | 宿主真正實作 `bluesai-management/1` 及 `bluesai-management-api/1` |
 | Sites D1/R2 原生後台適配 | `unsupported`：本套件沒有通用可部署適配 | 先完成宿主相容層；不能把 Node SQLite 直接搬進 Workers |
 | 原生本人送出、正式站和真實渠道驗收 | `not_verified`，逐次核對 | 當前工具、本人操作和同筆觀察結果 |
 
@@ -26,7 +26,7 @@
 npm run preflight -- --host C:\Private\bluesai-host.json --mode collaboration --source FULL_40_CHARACTER_COMMIT
 ```
 
-`FULL_40_CHARACTER_COMMIT` 必須換成已核對且實際包含套件 manifest 的完整來源 commit。不要使用 `main`。`--mode` 可選 `collaboration`、`web-chat` 或 `whatsapp`；加入 `--management` 會額外檢查完整三分頁的原生 renderer/API。
+`FULL_40_CHARACTER_COMMIT` 必須換成已核對且實際包含套件 manifest 的完整來源 commit。不要使用 `main`。`--mode` 可選 `collaboration`、`web-chat` 或 `whatsapp`；加入 `--management` 會額外檢查收件匣工作區所需的原生 renderer/API。導覽及資產邊界見 `integrations/blueprint/card-ui.json`；basic／training／connect 舊內部 ID 不要求宿主沿用舊介面。
 
 preflight 只讀指定檔案並輸出 JSON，沒有備份、登記、資料遷移或寫入工作室。退出碼 `0` 代表 `ready`，`2` 代表 `blocked` 或 `requires_setup`，`1` 代表參數或檔案無法讀取。輸出的 `plan_digest` 固定本次目標、模式、套件來源及資料保護範圍。
 
@@ -128,7 +128,7 @@ const receipt = await installer.ensure({
 提交並保持 checkout 乾淨後，使用**新的、倉庫外絕對目錄**：
 
 ```powershell
-npm run package:release -- --output C:\Private\bluesai-release-0.3.0-preview.2
+npm run package:release -- --output C:\Private\bluesai-release-0.4.0-preview.1
 ```
 
 產出 `source.tar` 及 `release.json`。後者保存完整來源 commit、套件版本、preview 標記、宿主合約參考、檔案 inventory SHA-256 及 tar SHA-256。雜湊以 Git commit 的實際 blob bytes 計算，不受 Windows 工作副本換行影響。已存在的輸出目錄、dirty checkout、倉庫內輸出或未經審閱的 symlink 會被拒絕。生成物不回寫到來源，因此沒有把自身 commit 寫回 manifest 的循環問題。
@@ -148,4 +148,4 @@ npm run package:release -- --output C:\Private\bluesai-release-0.3.0-preview.2
 | P2 客人渠道垂直流程 | Node 網頁客服及 Evolution 共用核心；不等於已部署或真人收件 |
 | 私人工作室部署及完整現場驗收 | 本套件不執行；按已授權目標另行核對 |
 
-這份套件沒有把私人 Sites 安裝紀錄或相容程式當作所有人的公開來源。缺少宿主 renderer、受限 API、持久執行器或正式升級接口時，先交付該相容層，不能把安裝計劃整份標作已完成。完整 WhatsApp／網頁設定操作見 [INSTALL.md](INSTALL.md) 及工作台「接駁」教學。
+這份套件沒有把私人 Sites 安裝紀錄或相容程式當作所有人的公開來源。缺少宿主 renderer、受限 API、持久執行器或正式升級接口時，先交付該相容層，不能把安裝計劃整份標作已完成。完整 WhatsApp／網頁設定操作見 [INSTALL.md](INSTALL.md) 及卡片「管理」中的渠道狀態與接駁教學。

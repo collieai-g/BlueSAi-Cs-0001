@@ -1,12 +1,14 @@
-# Blueprint 整合套件 0.3.0-preview.2
+# Blueprint 整合套件 0.4.0-preview.1
 
 單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](../../docs/AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
 
-`agent.json` 是符合 `blueprint-agent/1` 的可登記 manifest，保留產品顯示身份，宿主 ID 為 `bluesai-cs-0001`。它提供共用 standard 控制項的按需草稿操作。宿主 `1157aa49538b402e7a54996068e845c44abecb8f` 的公開合約已核對；登記不會安裝 Node 程式、啟動 WhatsApp 或產生原生三分頁。
+`agent.json` 是符合 `blueprint-agent/1` 的可登記 manifest，保留產品顯示身份，宿主 ID 為 `bluesai-cs-0001`。它提供共用 standard 控制項的按需草稿操作。宿主 `1157aa49538b402e7a54996068e845c44abecb8f` 的公開合約已核對；登記不會安裝 Node 程式、啟動 WhatsApp 或產生原生收件匣工作區。
+
+卡片只有一個 Agent／instance：精簡入口展開後顯示「收件匣／知識庫／管理」，日常對話優先；商戶設定、全域政策與渠道教學放在管理。`card-ui.json` 及 `sites/renderer-contract.json` 描述檢視、上下文抽屜與資產邊界，狀態仍待宿主整合。舊 basic／training／connect DOM ID 可作本機程式相容，不是舊導覽的安裝要求。
 
 `package.json` 是機器可讀能力描述。`sites/renderer-contract.json` 明示完整管理介面需要的宿主擴充；本套件沒有把私人 Sites 適配或 D1/R2 身份發佈到公開來源。沒有這些實際能力時，preflight 會拒絕完整管理安裝，轉交宿主相容層開發。網站前端使用的 localhost 不是雲端服務。
 
-執行 `npm run preflight -- --host /private/host-evidence.json --mode collaboration --source FULL_COMMIT`。此命令只讀檔案並輸出 JSON，不備份、不註冊、不寫入工作室。host 檔格式參考 `fixtures/host.json`，fixture 的合成身份及宣告不能當成正式站證據。設定 `--management` 會核對完整三分頁 renderer/API；`--mode whatsapp` 亦檢查獨立執行器、持久儲存、HTTPS 及渠道設定。`--mode web-chat` 檢查獨立服務、HTTPS 客人入口和明確開啟網頁客服；兩種渠道的真正客人收件需另外驗收。
+執行 `npm run preflight -- --host /private/host-evidence.json --mode collaboration --source FULL_COMMIT`。此命令只讀檔案並輸出 JSON，不備份、不註冊、不寫入工作室。host 檔格式參考 `fixtures/host.json`，fixture 的合成身份及宣告不能當成正式站證據。設定 `--management` 會核對收件匣工作區的原生 renderer/API；`--mode whatsapp` 亦檢查獨立執行器、持久儲存、HTTPS 及渠道設定。`--mode web-chat` 檢查獨立服務、HTTPS 客人入口和明確開啟網頁客服；兩種渠道的真正客人收件需另外驗收。
 
 `src/install.js` 提供共用安裝工作的持久階段、版本檢查、相同操作重跑、備份 scope/schema/checkpoint/私人副本收據驗證。它不會自己做第二份備份；宿主 D1 收據不涵蓋外部 SQLite。安裝器必須將實際宿主 receipt 接到同一 `operation_id`，並在每個階段保存證據。收據格式驗證不等於已讀取或還原備份。
 

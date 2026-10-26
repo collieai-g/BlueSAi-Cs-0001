@@ -1,9 +1,9 @@
 請把 BlueSAi-Cs-0001 作為我現有 Blueprint Studio「AI → Agent 工作台」內的一個客服卡片項目安裝或更新。
 來源：https://github.com/collieai-g/BlueSAi-Cs-0001
 
-先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.3.0-preview.2 是預覽；固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。
+先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.4.0-preview.1 是預覽；固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。
 
-1. 客服只能是一個已登記 Agent 項目。入口與配置為同一項目的狀態，基本設定／訓練／接駁與自己的客戶對話都在同一卡片內容區。只掛載客服根節點及 /api/agents/bluesai-cs-0001；外層導覽、身份及排版由宿主管理。
+1. 客服只能是一個已登記 Agent 項目。精簡入口展開為同一實例的收件匣／知識庫／管理工作區，對話優先，設定及渠道教學放在管理；不是再建立另一套客服工作室。只掛載客服根節點及 /api/agents/bluesai-cs-0001；外層導覽、身份及排版由宿主管理。
 
 2. 禁止以整頁客服取代宿主「總覽、工作、資料」、側欄、頂列、全域路由、CSS 或資料庫。不能把舊診斷介面搬進工作室，不代理宿主整個 /api，不直接共用或改寫宿主業務表。只經明確授權的受限整合讀取指定公司來源；客服自己的儲存、設定及對話保持獨立範圍。
 
@@ -17,7 +17,7 @@
 
 7. 變更前保存能還原的資料副本，驗證 scope、schema、checkpoint、可讀私人副本及還原結果。D1 備份不涵蓋外部 SQLite 或手機登入狀態。保留既有登入、公司資料、空白欄位、批准／撤銷、人工接手、未完成工作及歷史；不加入虛構商戶資料，不靜默打開自動回覆或對客發送。
 
-8. 完整通用 Sites D1／R2 管理 API、原生三分頁 renderer 及宿主 manifest 原地升級尚未由此套件交付。需要宿主擴充時先交付相容層並驗證，不把登記當作安裝完成。只有客服設定／登記改動且宿主來源未變時，不重新部署宿主。Node／SQLite 後台獨立持久運行，不能原封不動放進 Workers。
+8. 完整通用 Sites D1／R2 管理 API、收件匣工作區的原生 renderer 及宿主 manifest 原地升級尚未由此套件交付。需要宿主擴充時先交付相容層並驗證，不把登記當作安裝完成。只有客服設定／登記改動且宿主來源未變時，不重新部署宿主。Node／SQLite 後台獨立持久運行，不能原封不動放進 Workers。
 
 9. 執行客服及宿主要求的檢查；驗證保存及同 ID 讀回、批准／撤銷、過期、人工接手、重啟、320px、真正 200% browser zoom 及卡片尺寸。真實 WhatsApp 用指定手機完成同筆來訊、核對回覆及實際收件；accepted 不當 delivered，uncertain 先核對不盲目重發。本人尚未掃碼或送出原生交接時，標為 waiting_user。
 

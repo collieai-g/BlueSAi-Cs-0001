@@ -27,5 +27,5 @@
   },
   "user_actions": ["Choose and authenticate the channel account in its secure UI", "Scan WhatsApp QR if needed", "Submit native Codex/DOT handoff", "Confirm observable test receipt before operational rollout"],
   "manifest": "integrations/blueprint/agent.json",
-  "ui_contract": {"document": "docs/AGENT_UI_CONTRACT.md", "placement": "AI / Agent workbench / one registered customer-service card", "api_namespace": "/api/agents/bluesai-cs-0001", "host_content_writes": "forbidden", "host_navigation_replacement": "forbidden"}
+  "ui_contract": {"document": "docs/AGENT_UI_CONTRACT.md", "placement": "AI / Agent workbench / one registered customer-service card", "states": ["entry", "workspace"], "views": ["inbox", "knowledge", "manage"], "default_view": "inbox", "api_namespace": "/api/agents/bluesai-cs-0001", "host_content_writes": "forbidden", "host_navigation_replacement": "forbidden"}
 }
