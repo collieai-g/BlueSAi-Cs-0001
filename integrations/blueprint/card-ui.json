@@ -8,7 +8,26 @@
   "api_namespace": "/api/agents/bluesai-cs-0001",
   "root_selector": "#cs-card-design",
   "item_count": 1,
-  "states": ["entry", "configuration"],
+  "states": ["entry", "workspace"],
+  "views": ["inbox", "knowledge", "manage"],
+  "view_labels": {"inbox":"收件匣", "knowledge":"知識庫", "manage":"管理"},
+  "default_view": "inbox",
+  "legacy_dom_view_ids": {"inbox":"basic", "knowledge":"training", "manage":"connect"},
+  "workspace": {
+    "default_card_width_css_px": 864,
+    "default_layout": "conversation list and detail with context drawer",
+    "three_column_min_content_width_css_px": 1080,
+    "narrow_layout": "list or selected detail with back navigation and context drawer",
+    "management_scope": ["merchant settings", "global reply policy", "channel status and connection guides"],
+    "knowledge_scope": ["approved FAQ", "reviewable memory"],
+    "self_tests": "separate read-only view; excluded from customer pending counts, automation, DOT and sending",
+    "unsupported_controls": ["invented CRM properties", "assignment", "SLA", "ticket closure"]
+  },
+  "design_reference": {
+    "kind": "interaction inspiration only; no Zendesk integration or copied proprietary assets",
+    "official_documentation": "https://support.zendesk.com/hc/en-us/articles/4408821259930-About-the-Zendesk-Agent-Workspace/",
+    "user_demo": "https://www.zendesk.hk/demo/"
+  },
   "assets": {
     "markup": "public/agent-card.html",
     "stylesheet": "public/agent-card.css",

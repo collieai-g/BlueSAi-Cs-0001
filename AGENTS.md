@@ -2,7 +2,8 @@
 
 項目名稱：BlueSAI-客服。Agent 編號：`BlueSAi-Cs-#0001`。更改身份資料時，同步 agent.json、介面及文件。
 
-- 產品是「AI → Agent 工作台」內的一個客服卡片項目。先讀 docs/AGENT_UI_CONTRACT.md 及 docs/BLUEPRINT_PLUGIN_DESIGN.md；入口／配置是同一項目的狀態，基本設定／訓練／接駁保持在同一卡片內。
+- 產品是「AI → Agent 工作台」內的一個客服卡片項目。先讀 docs/AGENT_UI_CONTRACT.md 及 docs/BLUEPRINT_PLUGIN_DESIGN.md；精簡入口展開為同一實例的工作區，主要檢視是「收件匣／知識庫／管理」。對話優先；商戶設定、全域回覆政策及渠道教學放在管理，不再把收件匣藏於基本設定。保留舊 basic／training／connect 內部 ID 只作程式相容，不代表舊導覽仍為產品規格。
+- 收件匣按可用卡片寬度呈現列表、對話及上下文：864px 預設採雙欄加上下文抽屜，內容寬達 1080px 才可三欄；手機以列表／詳情返回切換。新來訊、切換對話或檢視不得清空未送出文字。只呈現後台已有狀態，不加入假 CRM、分派、SLA 或結案功能。
 - 禁止把客服整頁或「總覽／工作／AI／資料」外殼當成 Agent 介面。禁止覆蓋宿主導覽、總覽卡片、工作記錄、資料、全域路由及 CSS；只掛載客服根節點及受限資料域。
 - 卡片前端只使用 /api/agents/bluesai-cs-0001 命名空間。不得把宿主整個 /api 代理到客服，不得共用或直接改寫宿主資料表；既有資料只經明確授權整合讀取。
 - 卡片移動、縮放及每類固定最小／最大尺寸由宿主整合落實。文件中的整合規格不可寫成已可用功能；未授權不要直接修改測試工作室。
@@ -12,7 +13,8 @@
 - 人工接手、資料批准、發送開關、來源有效性及版本檢查必須在程式落實，不能只靠 prompt。
 - 未明確授權實際發送時，不連接真實客戶渠道。測試使用暫存資料和模擬 provider。
 - 使用者要求真實 WhatsApp 測試時，實作真實連結裝置／收件／回覆路線；本人掃碼及指定測試號碼不可省略。不能用離線規則、模擬 provider 或網頁扮演客人代替真實 WhatsApp 驗收。未完成項目列明缺項及可執行下一步。
+- WhatsApp 自傳連線測試另列只讀檢視，不計入客戶待處理，不觸發知識庫、自動／人工發送、DOT 草稿或外部通知。FAQ 必須是唯一吻合且已確認、仍有效的答案；DOT 只保存綁定最新對話版本的待核對草稿，不能因開啟編輯器就聲稱已處理或已發送。
 - 修改後執行 npm test 及 npm run check。涉及介面時，用瀏覽器驗證主要操作和手機版面。
-- 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服補充樣式放 public/style.css。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
+- 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服樣式修改 design/customer-agent-card-design.html 後經建置產生，宿主只載入 agent-card.css 的根節點內樣式。public/style.css 僅供舊診斷頁，不能加入宿主卡片 bundle。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
 - 所有對外狀態必須依實際結果：configured 不是 connected，accepted 不是 delivered，repository written 不是 deployed。
 - 未獲使用者明確授權，不要更改 GitHub 倉庫可見性、覆寫他人提交或加入付費資源。

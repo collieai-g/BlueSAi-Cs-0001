@@ -3,12 +3,17 @@
   "status": "requires_host_implementation",
   "renderer": "bluesai-management/1",
   "api": "bluesai-management-api/1",
-  "tabs": ["basic", "training", "connections"],
+  "views": ["inbox", "knowledge", "manage"],
+  "view_labels": {"inbox":"收件匣", "knowledge":"知識庫", "manage":"管理"},
+  "default_view": "inbox",
+  "legacy_dom_view_ids": {"inbox":"basic", "knowledge":"training", "manage":"connect"},
   "identity": "host authenticated company and registered instance; never browser supplied tenant_id",
-  "layout": "one registered Agent item with entry/configuration states in one native host card; preserve unsaved inputs on tab changes",
+  "layout": "one registered Agent item with compact entry/expanded inbox workspace states in one native host card; preserve selection and per-conversation drafts across views",
+  "responsive_layout": {"default_card_width_css_px":864,"default":"list and conversation with context drawer","three_column_min_content_width_css_px":1080,"narrow":"list or selected detail with back navigation and context drawer"},
+  "unsupported_controls": ["invented CRM properties", "assignment", "SLA", "ticket closure"],
   "api_namespace": "/api/agents/bluesai-cs-0001",
   "prohibited_host_writes": ["overview content or cards other than this Agent", "work records", "data collections", "navigation", "global routes", "global CSS", "direct host database writes"],
   "security": ["host owns renderer and authorization", "no remote HTML, script or iframe", "mount only the Agent root and its namespaced routes", "server-only restricted service credentials", "CAS on settings, knowledge and tasks", "approved unexpired knowledge only"],
   "data_scope": "one instance per company; external SQLite requires its own backup coverage",
-  "required_verification": ["permission revocation", "save and same-ID readback", "320 CSS px", "desktop browser 200% zoom", "card dimensions from docs/BLUEPRINT_PLUGIN_DESIGN.md", "restart persistence"]
+  "required_verification": ["permission revocation", "save and same-ID readback", "320 CSS px list/detail and context drawer", "desktop browser 200% zoom", "card dimensions from docs/BLUEPRINT_PLUGIN_DESIGN.md", "per-conversation draft and focus preservation", "read-only self tests excluded from customer automation and counts", "restart persistence"]
 }
