@@ -8,11 +8,25 @@
 
 根目錄 `agent.json` 是產品身份；`integrations/blueprint/agent.json` 是可登記的協作 manifest。完整卡片 renderer 與公司固定的受限 API 必須由實際宿主支援。單靠登記、卡片可見或 GitHub 已推送，不代表後台、手機連線或收發已啟動。
 
-## 先核對同一個目標
+## 新工作室與同工作室升級
 
-沿用已確認的工作室網址、公司、部署來源、Site、儲存及安裝 operation_id。先做只讀 preflight，記錄實際宿主和客服完整 commit；沒有正式 Release 時明確使用固定 preview。套件、CAS journal、共享備份 coverage 與登記 client 操作見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。
+先從已驗證身份核對真正工作室、公司及 instance，再選 fresh 或 upgrade。這兩個名稱描述安裝流程，不是新增的 CLI 參數。公開程式可重用；私人執行資料不能因安裝程式而一起搬走。
 
-必要備份須涵蓋真正資料域、schema、checkpoint、可讀私人副本及還原驗證。宿主 D1 備份不涵蓋外部 SQLite／手機登入狀態。保留空白欄位、批准／撤銷、人工接手、歷史及未完成工作；不因安裝重設資料。
+| 項目 | 新工作室／新商戶（fresh） | 同一工作室升級（upgrade） |
+| --- | --- | --- |
+| 核心與私人資料 | 新的獨立 runtime，明確指定倉庫外、尚未使用的空白 BLUEPRINT_DATA_DIR；不沿用舊本機核心或共用預設目錄 | 沿用同一已核對實例及原 BLUEPRINT_DATA_DIR，正常停機備份後增量更新 |
+| 商戶、知識及歷史 | 商戶可選欄位空白；FAQ、已學記憶、對話、帳戶紀錄及學習提議皆無舊站資料 | 保留現有商戶、空白欄位、批准／撤銷、人工狀態、歷史及未完成工作 |
+| WhatsApp | 新的獨立 WA_LOCAL_DATA_DIR／橋接 instance、帳戶綁定、憑證及 callback；由本人新連結該工作室渠道，不複製既有 auth | 沿用原橋接私人目錄及已連結帳戶，登入仍有效便不強制重掃 QR |
+| 模型與發送 | 另行核對該 runtime 的模型身份／額度，接駁及自動處理／學習／發送均明確確認，預設不承接舊授權 | 保留持久政策與工作；重新核對實際 adapter、渠道及重啟後已關閉的程序內授權，不默默擴大範圍 |
+| 驗收 | 讀回空白資料、獨立 runtime 及正確新帳戶；再建立本人確認內容及做真收發 | 讀回同 ID、原資料保留及 schema 結果，核對渠道可接續；未知發送結果不重做 |
+
+新安裝前，安裝人員先為核心與橋接安排獨立的程序、連接埠／origin 及私人資料目錄，再設定其相互認證與固定 callback。私下記錄目標公司與 runtime 的對應，不把身份、目錄、登入、資料庫或真實訊息放入 GitHub。不要複製舊 .env、SQLite、FAQ／學習匯出、帳戶記錄或 WhatsApp auth；新的設定由本人安全提供。若目的地已有資料，先停止核對它是否屬於同一安裝，不能刪掉後宣稱 fresh，也不能當成新公司的預設資料。
+
+新卡片不能直接指向既有本機核心、預覽服務、共用預設資料目錄或另一公司的渠道。宿主 installer 的 manifest 登記不會自動建立或隔離外部 runtime；宿主 adapter、目標綁定或獨立服務未完成時列為 requires_setup，先補缺項，不接入舊私人後台。
+
+同一工作室升級才沿用已確認網址、公司、Site、儲存及 Agent ID。每次新的升級計劃使用自己的 operation_id；本次已有升級工作時，重試才接續該工作，不能將不同來源／計劃塞進舊 operation_id。新目標建立自己的安裝工作。兩者都先做只讀 preflight，記錄實際宿主和客服完整 commit；沒有正式 Release 時固定 preview。套件、CAS journal、共享備份 coverage 與登記 client 操作見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。
+
+升級或會改動宿主既有資料時，必要備份須涵蓋真正資料域、schema、checkpoint、可讀私人副本及還原驗證；新客服資料域空白不免除宿主實際變更的備份要求。宿主 D1 備份不涵蓋外部 SQLite／手機登入狀態。同一安裝不因升級重設資料。
 
 ## 本機執行器
 
@@ -24,7 +38,7 @@ npm start
 
 預設監聽 `127.0.0.1:3100`。開啟 `/` 或 `/workbench.html` 使用單一卡片；相容 `/console` 亦回到卡片。舊整頁診斷工具只能明確從 `/diagnostics/console` 使用，不能作為宿主 UI。`npm run workbench` 的 3101 卡片預覽沒有收發 worker。
 
-私人設定可由環境或未追蹤的 `.env` 提供；已有環境變數優先，修改後重啟。服務生成的管理員 token 在資料目錄，請本機安全讀取，毋須貼到聊天。
+私人設定可由環境或未追蹤的 `.env` 提供；已有環境變數優先，修改後重啟。每個新工作室均重新提供自己的設定，不複製另一安裝的環境檔。服務生成的管理員 token 在資料目錄，請本機安全讀取，毋須貼到聊天。
 
 | 變數 | 用途 |
 | --- | --- |
@@ -63,7 +77,7 @@ Codex 官方說明指出 `exec` 可沿用已保存登入，`--ephemeral` 不保�
 
 ## 真實 WhatsApp 的準備與驗收
 
-1. 啟動真實接駁服務。已有 Evolution 時沿用指定 instance；本機橋接見 [WhatsApp 路線](WHATSAPP_RUNTIME.md) 及 `integrations/whatsapp-local/README.md`。只填網址不會安裝或啟動服務。
+1. 啟動此工作室自己的真實接駁服務。同一安裝升級時沿用原 Evolution instance；fresh 則先建立及核對新的獨立 instance／帳戶綁定，不接用舊私人服務；本機橋接見 [WhatsApp 路線](WHATSAPP_RUNTIME.md) 及 `integrations/whatsapp-local/README.md`。只填網址不會安裝或啟動服務。
 2. 卡片的「管理 → 接駁 WhatsApp」取得真實 QR，由本人在手機「已連結裝置」掃碼，再核對實際 open 狀態。入口的 WhatsApp 捷徑導向同一管理流程；QR 不傳入模型、日誌或公開倉庫。
 3. 在卡片私人設定選定本人同意的測試號碼。空 allowlist 的本機橋接只允許 QR／狀態，不轉送或發送其他客戶內容。核對 callback 的固定網址、認證與可達性。
 4. 保持 review，以指定另一支測試 WhatsApp 號碼來訊，在收件匣讀回同一筆訊息；先驗證收件及草稿。商戶資料只填本人已確認的內容；純知識庫／人工模式不代填未知欄位，使用模型自動處理時另核對其必要設定與發送門檻。
@@ -81,7 +95,7 @@ Codex 官方說明指出 `exec` 可沿用已保存登入，`--ephemeral` 不保�
 
 | 實際能力 | 處理方式 |
 | --- | --- |
-| 宿主已有相容 renderer、API 及運行服務 | 重用原 Agent ID、CAS 更新、讀回；宿主來源不變時不重新部署 |
+| 宿主已有相容 renderer、API 及運行服務 | fresh 登記空白設定並綁定新的獨立 runtime；同一工作室 upgrade 才重用原 Agent ID、CAS 更新及讀回。宿主來源不變時不重新部署 |
 | 有 Agent 登記，但沒有收件匣工作區 renderer／受限 API | 明確列為待開發；先補所缺合約，不用整頁或 iframe 替代 |
 | 有 Sites D1／R2 資料 | 沿用實際儲存及身份；獨立客服命名空間需審閱遷移與備份 coverage，禁止新站 gateway 覆蓋原資料 |
 | 只有靜態 Site／localhost 服務 | 尚不能作持續雲端客服；先取得可用執行及儲存方案。新增費用由用戶決定 |

@@ -4,6 +4,15 @@
 
 本版是 `0.4.0-preview.1` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
 
+## 新安裝與升級的資料契約
+
+公開來源及 source.tar 只包含可重用程式、文件、去私人化設定範本及合成測試資料。商戶知識／學習資料庫、對話、帳戶記錄、WhatsApp 真實來源／登入、手機身份、部署設定、日誌及備份不得打包；正式安裝 evidence／journal 也留在私人目錄。
+
+- **fresh：新工作室或新商戶。** 核對新目標的已驗證身份，以空白 manifest 商戶設定開始，另設未使用的倉庫外核心與橋接私人目錄、獨立 runtime／origin／instance、憑證及 callback。由本人重新連結該工作室的渠道，重新核對模型及明確授權；不複製舊 SQLite、知識匯出、帳戶紀錄、環境檔或 auth。卡片不能指向舊本機核心、共用預設目錄或另一工作室渠道。讀回資料空白及新 runtime 的正確綁定後才進行功能測試。
+- **upgrade：同一已驗證工作室。** 重用原 Agent ID、私人資料目錄及渠道登入；本次已有升級工作才接續其 operation_id，新的來源／計劃另建升級工作。先備份／驗證還原，再用固定新版來源及增量 schema，保留知識、對話、批准及未完成狀態；不要每次清空資料或重新連結手機。重啟後的程序內 grant／發送授權按實際狀態重新確認，未知結果不重送。
+
+這是安裝協調器須遵守的流程分流，不是目前 preflight 的新旗標。新目標需自己的 operation_id／journal；同一目標重試才接續原工作。現有登記 client 只處理宿主 Agent 設定，不會配置、隔離或搬移外部 runtime。缺少宿主 renderer、受限 API、目標綁定或獨立執行服務時仍為 requires_setup，不能因空白 manifest 已登記就聲稱新工作室可用。完整操作見 [INSTALL.md](INSTALL.md#新工作室與同工作室升級)。
+
 ## 先選交付模式
 
 | 模式／能力 | 本版軟件狀態 | 安裝現場仍需的證據 |
@@ -68,7 +77,7 @@ preflight 只讀指定檔案並輸出 JSON，沒有備份、登記、資料遷�
 
 ## 共用 operation_id、備份與接續
 
-`src/install.js` 提供 `InstallJournal` API，由既有宿主安裝協調流程呼叫；本版沒有宣稱已接入所有宿主的安裝助手。使用同一個 `operation_id`、目標及計劃摘要，不另建第二個安裝工作。journal 檔案須使用倉庫外的絕對 SQLite 路徑，其父目錄須已存在。
+`src/install.js` 提供 `InstallJournal` API，由既有宿主安裝協調流程呼叫；本版沒有宣稱已接入所有宿主的安裝助手。在同一目標的同一安裝／重試中使用同一個 `operation_id`、目標及計劃摘要，不另建第二個工作；新工作室使用自己的安裝工作，不借用舊目標的 journal。journal 檔案須使用倉庫外的絕對 SQLite 路徑，其父目錄須已存在。
 
 ```js
 import { InstallJournal, preflight } from './src/install.js';
@@ -121,7 +130,7 @@ const receipt = await installer.ensure({
 
 `authenticatedHostRequest(method, path, body?)` 是現有受信任宿主 client，回傳解析後的 JSON。`readAuthenticatedHostIdentity()` 必須從同一已驗證宿主身份取得 `{target_id, role}`，不能回傳使用者輸入或 preflight 檔案自行宣稱的身份。client 在任何修改前重新核對目標與 `inspection.plan.target_id` 相同、角色為 owner／admin；讀回前亦再次檢查。傳入 `ensure` 的角色字串不構成授權。兩個 callback 必須沿用同一真正登入、公司範圍、同源／請求驗證及正式 API 權限；不要把 owner token 注入前端或關閉伺服器驗證。client 只使用 `/api/studio/agents` 的分頁 GET／POST、單筆 GET 及帶 `expected_version` 的 PATCH。
 
-首次登記後會 GET 同 ID，核對 manifest、來源及設定。期望設定獨立從原要求正規化並保留；不能只將讀回內容與 POST／PATCH 回應互相比較，避免伺服器忽略寫入卻誤報成功。重跑相同版本和來源沿用原 Agent，設定更新合併未指定欄位並用 CAS；不重新部署宿主。已有多個相同產品實例時停止要求核對。若已安裝的 manifest 版本或來源不同，回報 `HOST_PACKAGE_UPGRADE_REQUIRED`：目前公開宿主合約沒有原地替換 manifest 的 API，不能為更新偷偷新增第二張卡片。需要由宿主提供經審閱的升級流程，並保留歷史工作的固定快照。
+新目標首次登記只從明確提供的設定及 manifest 空白商戶預設開始，不讀取另一工作室或本機的知識／帳戶／渠道資料。首次登記後會 GET 同 ID，核對 manifest、來源及設定。期望設定獨立從原要求正規化並保留；不能只將讀回內容與 POST／PATCH 回應互相比較，避免伺服器忽略寫入卻誤報成功。重跑相同版本和來源沿用原 Agent，設定更新合併未指定欄位並用 CAS；不重新部署宿主。已有多個相同產品實例時停止要求核對。若已安裝的 manifest 版本或來源不同，回報 `HOST_PACKAGE_UPGRADE_REQUIRED`：目前公開宿主合約沒有原地替換 manifest 的 API，不能為更新偷偷新增第二張卡片。需要由宿主提供經審閱的升級流程，並保留歷史工作的固定快照。
 
 ## 固定來源與生成 preview 發佈物
 
@@ -132,6 +141,8 @@ npm run package:release -- --output C:\Private\bluesai-release-0.4.0-preview.1
 ```
 
 產出 `source.tar` 及 `release.json`。後者保存完整來源 commit、套件版本、preview 標記、宿主合約參考、檔案 inventory SHA-256 及 tar SHA-256。雜湊以 Git commit 的實際 blob bytes 計算，不受 Windows 工作副本換行影響。已存在的輸出目錄、dirty checkout、倉庫內輸出或未經審閱的 symlink 會被拒絕。生成物不回寫到來源，因此沒有把自身 commit 寫回 manifest 的循環問題。
+
+生成前亦逐檔檢查固定 commit 的路徑及 blob：即使私人環境檔、資料庫／日誌、手機 auth、管理員 token、備份或明確客戶／知識匯出曾被誤追蹤，也會阻擋套件建立；可識別的私鑰及 API key 格式同樣拒絕。空白 `.env.example` 可保留。這層檢查補充 `.gitignore`，仍須審閱變更，避免把商戶文字或其他私人資料寫進普通程式檔；不會讀取或打包倉庫外的實際私人後台。
 
 安裝前核對 tar 雜湊、完整來源 pin、manifest 與 inventory；來源必須真正含有該 manifest。生成成功本身不證明測試成功；依相同 commit 的 CI 結果核對。CI 於 Windows／Ubuntu 執行 `npm test`、`npm run check`、固定 fixture preflight 及 commit 產物建置。原生 manifest 已經現有 Python validator 檢查；正式宿主與渠道仍要在現場驗收。
 

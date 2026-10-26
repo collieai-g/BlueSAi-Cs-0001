@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,readFileSync,writeFileSync,mkdirSync,rmSync,existsSync } from 'node:fs';
+import { mkdtempSync,readFileSync,writeFileSync,mkdirSync,rmSync,existsSync,realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve,dirname,basename } from 'node:path';
 import { execFileSync,spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -137,17 +137,100 @@ test('manifest matches pinned connected_client contract and contains no credenti
   for(const field of [...manifest.settings,...manifest.operations.flatMap(op=>op.input_fields)])assert.ok(['text','textarea','select','boolean'].includes(field.type));
   assert.equal(manifest.settings.find(f=>f.key==='merchant_name').default,'');assert.equal(digest(manifest).length,64);
 });
-test('preview build hashes exact clean Git source and rejects dirty or overwritten artifacts',t=>{
-  const parent=mkdtempSync(resolve(tmpdir(),'bluesai-package-')),repo=resolve(parent,'repo'),output=resolve(parent,'release');mkdirSync(resolve(repo,'tools'),{recursive:true});mkdirSync(resolve(repo,'integrations/blueprint'),{recursive:true});
-  t.after(()=>rmSync(parent,{recursive:true,force:true,maxRetries:10,retryDelay:50}));
+function packageFixture(t) {
+  const base=realpathSync(tmpdir()),parent=mkdtempSync(resolve(base,'bluesai-package-')),repo=resolve(parent,'repo'),output=resolve(parent,'release');mkdirSync(resolve(repo,'tools'),{recursive:true});mkdirSync(resolve(repo,'integrations/blueprint'),{recursive:true});
+  t.after(()=>{const actual=realpathSync(parent);assert.equal(dirname(actual),base);assert.ok(basename(actual).startsWith('bluesai-package-'));rmSync(actual,{recursive:true,force:true,maxRetries:10,retryDelay:50});});
   writeFileSync(resolve(repo,'tools/package-release.js'),readFileSync(new URL('../tools/package-release.js',import.meta.url)));
+  writeFileSync(resolve(repo,'tools/release-privacy.js'),readFileSync(new URL('../tools/release-privacy.js',import.meta.url)));
+  writeFileSync(resolve(repo,'.gitignore'),readFileSync(new URL('../.gitignore',import.meta.url)));
   writeFileSync(resolve(repo,'package.json'),' {"type":"module"}\n');writeFileSync(resolve(repo,'integrations/blueprint/package.json'),readFileSync(new URL('../integrations/blueprint/package.json',import.meta.url)));writeFileSync(resolve(repo,'sample.txt'),'synthetic source\n');
   const git=(...args)=>execFileSync('git',args,{cwd:repo,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   git('init');git('-c','core.autocrlf=false','add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-m','synthetic fixture');
+  git('config','user.name','Fixture');git('config','user.email','fixture@example.test');git('config','core.autocrlf','false');
   const run=target=>spawnSync(process.execPath,['tools/package-release.js','--output',target],{cwd:repo,encoding:'utf8'});
+  const track=(path,bytes)=>{const target=resolve(repo,path);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,bytes);git('add','-f','--',path);git('commit','-m','synthetic tracked fixture');assert.equal(git('status','--porcelain'),'');};
+  return {parent,repo,output,git,run,track};
+}
+test('preview build hashes exact clean Git source and rejects dirty or overwritten artifacts',t=>{
+  const {parent,repo,output,git,run}=packageFixture(t);
   const inRepo=resolve(repo,'..private/release');assert.equal(run(inRepo).status,1);assert.equal(existsSync(inRepo),false);
   assert.equal(run(output).status,0);const result=JSON.parse(readFileSync(resolve(output,'release.json'),'utf8'));
   assert.equal(result.source.revision,git('rev-parse','HEAD'));assert.equal(result.channel,'preview');
   const sha256=x=>createHash('sha256').update(x).digest('hex');assert.equal(result.artifacts[0].sha256,sha256(readFileSync(resolve(output,'source.tar'))));assert.equal(result.inventory.find(f=>f.path==='sample.txt').sha256,sha256('synthetic source\n'));
   assert.equal(run(output).status,1);writeFileSync(resolve(repo,'sample.txt'),'changed\n');const second=resolve(parent,'dirty-release');assert.equal(run(second).status,1);assert.equal(existsSync(second),false);
+});
+
+test('public source, blank environment examples and ordinary synthetic fixtures remain distributable',t=>{
+  const f=packageFixture(t);
+  for(const [path,content] of [
+    ['.env.example','OPENAI_API_KEY=\nEVOLUTION_API_KEY=\n'],
+    ['integrations/whatsapp-local/.env.example','WA_LOCAL_API_KEY=\n'],
+    ['src/agent.js','export const publicAgent = true;\n'],
+    ['src/knowledge-learning.js','export const publicLearning = true;\n'],
+    ['test/fixtures/customer-conversation.json',JSON.stringify({synthetic:true,messages:[]})],
+    ['test/fixtures/knowledge.json',JSON.stringify({synthetic:true,knowledge:[]})],
+    ['docs/KNOWLEDGE_LEARNING.md','Public workflow design and synthetic examples.\n'],
+    ['docs/api-example.md','Use sk-your-key as a placeholder.\n-----BEGIN PRIVATE KEY-----\n<REPLACE_WITH_YOUR_PRIVATE_KEY>\n-----END PRIVATE KEY-----\n'],
+  ])f.track(path,content);
+  const result=f.run(f.output);assert.equal(result.status,0,result.stderr);
+  const release=JSON.parse(readFileSync(resolve(f.output,'release.json'),'utf8'));
+  assert.ok(release.inventory.some(row=>row.path==='src/knowledge-learning.js'));assert.ok(release.inventory.some(row=>row.path==='.env.example'));
+});
+
+test('tracked private runtime and customer-export paths block release before any artifact directory exists',t=>{
+  const f=packageFixture(t),marker='SYNTHETIC_PRIVATE_FILE_NOT_FOR_RELEASE';let n=0;
+  for(const path of [
+    'runtime.env','config/bridge.env','.env','.env.production',
+    'state/service.sqlite','service.db-wal','service.sqlite-shm','server.log','server.log.1',
+    'state/auth/session.json','auth.json','creds.json','admin-token','backups/snapshot.json',
+    'customer-export.json','knowledge_export.json','inbox-export.csv','knowledge.json',
+    'customer-data.json','exports/customer-records.json','docs/knowledge-export.md','inbox-export.sql','customer-conversations-export.yaml','knowledge-export.jsonc',
+  ]){
+    f.track(path,marker+'\n');
+    const target=resolve(f.parent,'blocked-'+(++n)),result=f.run(target);
+    assert.equal(result.status,1,path);assert.match(result.stderr,/Release blocked by privacy gate/);assert.equal(existsSync(target),false,path);
+    assert.doesNotMatch(result.stdout+result.stderr,new RegExp(marker));
+    f.git('rm','--',path);f.git('commit','-m','remove synthetic private fixture');
+  }
+});
+
+test('commit blob bytes detect disguised databases and explicit key formats even in an allowed public path',t=>{
+  const f=packageFixture(t);let n=0;
+  const privateHeader=['-----BEGIN ','PRIVATE KEY-----'].join(''),privateEnd=['-----END ','PRIVATE KEY-----'].join('');
+  const samples=[
+    Buffer.concat([Buffer.from('SQLite format 3\0'),Buffer.from('synthetic database fixture')]),
+    Buffer.from([0x37,0x7f,0x06,0x82,0,0,0,0]),
+    [privateHeader,'A'.repeat(64),privateEnd].join('\n'),
+    [['-----BEGIN ','RSA PRIVATE KEY-----'].join(''),'Proc-Type: 4,ENCRYPTED','DEK-Info: AES-256-CBC,'+'A'.repeat(32),'','B'.repeat(64),'Cg==',['-----END ','RSA PRIVATE KEY-----'].join('')].join('\n'),
+    ['sk-','proj-','aB3cD4'.repeat(12)].join(''),
+    ['sk-','svcacct-','eF5gH6'.repeat(12)].join(''),
+    ['sk-','jK7mN8'.repeat(10)].join(''),
+  ];
+  for(const bytes of samples){
+    f.track('sample.txt',bytes);const target=resolve(f.parent,'private-bytes-'+(++n)),result=f.run(target);
+    assert.equal(result.status,1);assert.match(result.stderr,/PRIVATE_DATABASE_BYTES|PRIVATE_KEY_BYTES|OPENAI_CREDENTIAL_BYTES/);assert.equal(existsSync(target),false);
+    assert.ok(!result.stderr.includes(Buffer.isBuffer(bytes)?bytes.toString('utf8'):bytes));
+  }
+  f.track('.env.example',samples[4]);const target=resolve(f.parent,'private-example');assert.equal(f.run(target).status,1);assert.equal(existsSync(target),false);
+});
+
+test('privacy inspection reads the committed blob rather than a clean-filtered public working copy',t=>{
+  const f=packageFixture(t),node=process.execPath.replace(/\\/g,'/');
+  f.track('tools/synthetic-clean-filter.js',"process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(['-----BEGIN '+'PRIVATE KEY-----','A'.repeat(64),'-----END '+'PRIVATE KEY-----'].join('\\n')));\n");
+  f.git('config','filter.synthetic-private.clean','"'+node+'" tools/synthetic-clean-filter.js');
+  f.track('.gitattributes','public-note.txt filter=synthetic-private\n');
+  f.track('public-note.txt','synthetic harmless working copy\n');
+  assert.equal(readFileSync(resolve(f.repo,'public-note.txt'),'utf8'),'synthetic harmless working copy\n');
+  assert.equal(f.git('status','--porcelain'),'');
+  const result=f.run(f.output);assert.equal(result.status,1);assert.match(result.stderr,/PRIVATE_KEY_BYTES/);assert.equal(existsSync(f.output),false);
+});
+
+test('ignore rules prevent accidental runtime additions without hiding public learning code or environment examples',t=>{
+  const f=packageFixture(t);
+  for(const path of ['runtime.env','bridge.env','auth/creds.json','admin-token','backups/service.sqlite','knowledge-export.json','inbox-export.csv','customer-conversations-export.yaml']){
+    const result=spawnSync('git',['check-ignore','--',path],{cwd:f.repo,encoding:'utf8'});assert.equal(result.status,0,path);
+  }
+  for(const path of ['src/agent.js','src/knowledge-learning.js','.env.example','integrations/whatsapp-local/.env.example','test/fixtures/customer-conversation.json']){
+    const result=spawnSync('git',['check-ignore','--',path],{cwd:f.repo,encoding:'utf8'});assert.equal(result.status,1,path);
+  }
 });
