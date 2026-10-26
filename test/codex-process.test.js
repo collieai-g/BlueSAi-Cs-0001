@@ -88,3 +88,22 @@ test('native cancellation terminates an actual synthetic Node process tree and r
   await until(async()=>!(await alive(spawnedParent.pid))&&!(await alive(childPid)),2000,'Adapter cancellation left an owned parent or child running');
   assert.deepEqual(await readdir(root),[],'The native workspace is removable after cancellation');
 });
+
+test('a completed synthetic Node turn cannot leave its still-running exec host behind', {timeout:6500}, async t=>{
+  const parent=await realpath(tmpdir()),root=await mkdtemp(join(parent,'bluesai-completed-host-'));
+  let execution,agent;
+  t.after(async()=>{
+    agent?.close();
+    if(execution?.pid&&await alive(execution.pid)){try{process.kill(execution.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
+    if(execution?.pid)await until(async()=>!(await alive(execution.pid)),1500,'Owned synthetic exec survived cleanup');
+    const actual=await realpath(root);assert.equal(dirname(actual),parent);assert.ok(basename(actual).startsWith('bluesai-completed-host-'));await rm(actual,{recursive:true,maxRetries:4,retryDelay:50});
+  });
+  const script=`process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({text:'Synthetic verified answer.',decision:'answer',sourceIds:['synthetic-fact']})}})+'\\n'+JSON.stringify({type:'turn.completed'})+'\\n');setInterval(()=>{},1000);`;
+  agent=createCodexAgent({runtimeDir:root,timeoutMs:4000,spawnImpl:(executable,args,options)=>{
+    if(args[0]==='login')return loginStub();
+    assert.equal(args[0],'exec');assert.equal(options.shell,false);assert.equal(execution,undefined);
+    execution=spawn(process.execPath,['-e',script],options);assert.ok(Number.isInteger(execution.pid)&&execution.pid>0);return execution;
+  }});
+  const result=await agent.reply({profile:{},facts:[{id:'synthetic-fact',content:'Synthetic verified answer.',category:'general'}],history:[{role:'user',content:'Synthetic public fixture only.'}]});
+  assert.equal(result.decision,'answer');await until(async()=>!(await alive(execution.pid)),1000,'Completed owned exec did not terminate');assert.deepEqual(await readdir(root),[]);
+});

@@ -34,7 +34,7 @@ test('AI policy is explicit, rejects inconsistent or unavailable activation, and
   engine.configureInbox({enabled:true,automaticKnowledge:true});
   assert.deepEqual(engine.inboxPolicy(),{enabled:true,automaticKnowledge:true,aiFallback:true,automaticAi:true});
   assert.equal(store.value('profile').name,'');
-  assert.equal(store.get('SELECT MAX(version) AS n FROM schema_migrations').n,6);
+  assert.equal(store.get('SELECT MAX(version) AS n FROM schema_migrations').n,7);
 });
 
 test('connecting native Codex cannot inherit the legacy automatic route before explicit FAQ-first AI opt-in',async t=>{

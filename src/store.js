@@ -6,6 +6,7 @@ export const defaults = {
   settings: { mode: 'review', handoffContact: '' },
   inbox_policy: { enabled: false, automaticKnowledge: false, aiFallback: false, automaticAi: false },
   reply_provider: { provider: 'environment' },
+  knowledge_learning: { automaticAnalysis: false },
   revision: 1,
 };
 
@@ -51,7 +52,7 @@ export class Store {
     this.transaction(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
       const latest = this.get('SELECT MAX(version) AS version FROM schema_migrations').version || 0;
-      if (latest > 6) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
+      if (latest > 7) throw new Error('DATABASE_SCHEMA_NEWER_THAN_SERVICE');
       if (latest < 1) {
         this.db.exec(`
           CREATE TABLE response_windows (
@@ -125,6 +126,27 @@ export class Store {
           operation_id TEXT UNIQUE);
           CREATE UNIQUE INDEX self_test_one_faq ON self_test_reply_links(input_message_id,grant_id) WHERE kind='faq';`);
         this.run('INSERT INTO schema_migrations VALUES (?,?)', 6, Date.now());
+      }
+      if (latest < 7) {
+        this.db.exec(`CREATE TABLE learning_cases (
+          id TEXT PRIMARY KEY,
+          source_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          source_digest TEXT NOT NULL, snapshot_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','analyzing','analyzed','failed')),
+          error_code TEXT, created_at INTEGER NOT NULL, analyzed_at INTEGER);
+          CREATE TABLE learning_proposals (
+          id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES learning_cases(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('fact','procedure','style')),
+          title TEXT NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL, rationale TEXT NOT NULL,
+          evidence_json TEXT NOT NULL, questions_json TEXT NOT NULL, proposal_digest TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+          knowledge_id TEXT REFERENCES knowledge(id) ON DELETE SET NULL,
+          created_at INTEGER NOT NULL, reviewed_at INTEGER,
+          UNIQUE(case_id,proposal_digest));
+          CREATE INDEX learning_cases_status ON learning_cases(status,created_at);
+          CREATE INDEX learning_proposals_status ON learning_proposals(status,created_at);`);
+        this.run('INSERT INTO schema_migrations VALUES (?,?)', 7, Date.now());
       }
     });
   }

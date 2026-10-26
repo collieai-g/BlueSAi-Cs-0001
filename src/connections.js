@@ -173,9 +173,13 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
         candidate=await nativeAgentFactory();
         if(!candidate?.configured||candidate.provider!=='codex-cli'||typeof candidate.check!=='function'||typeof candidate.reply!=='function')throw new Error('INVALID_NATIVE_PROVIDER');
         await candidate.check();
-      }catch{
+      }catch(error){
+        let failureCode;
+        try{failureCode=candidate?.health?.().lastError;}catch{}
+        if(!/^CODEX_[A-Z_]{1,60}$/.test(failureCode||''))failureCode=/^CODEX_[A-Z_]{1,60}$/.test(error?.code||'')?error.code:'NATIVE_PROBE_FAILED';
+        ai={...ai,lastProbeError:failureCode};
         await closeAgent(candidate);
-        throw new ServiceError('原生 Codex 測試未成功。請在本機核對 CLI、ChatGPT 登入及可用額度後再試；尚未開啟 AI 自動回覆。',502);
+        throw new ServiceError(failureCode==='CODEX_TIMEOUT'?'原生 Codex 推理超時，請稍後再試；目前接駁及回覆政策保持不變。':'原生 Codex 測試未成功。請在本機核對 CLI、ChatGPT 登入及可用額度後再試；目前接駁及回覆政策保持不變。',502);
       }
       let previous;
       try{previous=engine.replaceAgent(candidate);}catch(error){await closeAgent(candidate);throw error;}

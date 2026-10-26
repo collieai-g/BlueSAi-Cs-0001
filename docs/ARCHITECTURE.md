@@ -59,7 +59,7 @@ CLI 自行沿用既有 ChatGPT 登入；客服不搬移 auth，也不把客服�
 - 未完成動作不得由模型聲稱已退款、預約、通知或改單。模型沒有這些執行工具。
 - 發送前重查人工狀態、來源、版本、發送開關、測試範圍及窗口。在途訊息不能保證撤回；不明結果不自動重發。
 
-schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／DOT 任務，v3 保存 provider instance、回執 inbox 及觀察，v4 保存受限網頁會話，v5 新增 FAQ 對照及知識庫優先政策，v6 新增 self_test_reply_links 的 grant／來訊／operation ID 關聯。遷移前正常停止、備份及驗證還原；不重建商戶資料或默默啟用發送。
+schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／DOT 任務，v3 保存 provider instance、回執 inbox 及觀察，v4 保存受限網頁會話，v5 新增 FAQ 對照及知識庫優先政策，v6 新增 self_test_reply_links 的 grant／來訊／operation ID 關聯，v7 附加 learning_cases／learning_proposals，將成功人工示範、待確認記憶及正式知識分開。見 [人工對話學習](KNOWLEDGE_LEARNING.md)。遷移前正常停止、備份及驗證還原；不重建商戶資料或默默啟用發送。
 
 ## 本人對話回覆測試的獨立路線
 

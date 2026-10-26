@@ -62,10 +62,11 @@ test('native output rejects invented sources, no-source answers and extra result
   }
 });
 
-test('native claims of completed actions become handoffs and learning stays unapproved raw text',async t=>{
-  const f=await fixture(t,({child})=>emitReply(child,{...valid,text:'已經退款。'}));
+test('native claims of completed actions become handoffs and teaching uses an isolated model inference',async t=>{
+  const f=await fixture(t,call=>emitReply(call.child,JSON.parse(call.stdin).teaching?{text:'請核對這項處理流程。',remember:true,title:'先識別貨品',content:'查詢到貨而未知道貨品時，先詢問貨品。',category:'procedure'}:{...valid,text:'已經退款。'}));
   assert.equal((await f.agent.reply(input)).decision,'handoff');const count=f.calls.length;
-  const learned=await f.agent.learn('只作待審原文');assert.equal(learned.content,'只作待審原文');assert.equal(f.calls.length,count);
+  const learned=await f.agent.learn('客人問到貨，先問邊款貨品。');assert.equal(learned.category,'procedure');assert.notEqual(learned.content,'客人問到貨，先問邊款貨品。');assert.ok(f.calls.length>count);
+  assert.ok(f.calls.at(-1).args.some(value=>value.endsWith('learn-schema.json')));assert.deepEqual(await readdir(f.root),[]);
 });
 
 test('API and native validation hand off unsupported completed actions in both customer languages',()=>{
@@ -133,4 +134,61 @@ test('native output is bounded and the adapter refuses unisolated configuration'
   assert.throws(()=>createCodexAgent({runtimeDir:'relative'}),/CODEX_INVALID_CONFIGURATION/);
   assert.deepEqual(codexEnvironment({Path:'bin',ADMIN_TOKEN:'secret'}),{Path:'bin'});
   assert.ok(!codexExecArgs('schema.json').some(arg=>arg.includes('danger-full-access')));
+});
+
+test('native cleanup retries transient workspace locks before returning a successful result',async t=>{
+  let removals=0;
+  const f=await fixture(t,({child})=>emitReply(child),{removeImpl:async(path,options)=>{
+    if(++removals<3)throw Object.assign(new Error('synthetic workspace lock'),{code:'EBUSY'});
+    return rm(path,options);
+  }});
+  assert.equal((await f.agent.reply(input)).decision,'answer');assert.equal(removals,3);
+  assert.equal(f.agent.health().status,'connected');assert.deepEqual(await readdir(f.root),[]);
+});
+
+test('a timeout remains the primary error if workspace cleanup also fails',async t=>{
+  let removals=0;
+  const f=await fixture(t,()=>{},{timeoutMs:40,removeImpl:async()=>{removals++;throw Object.assign(new Error('synthetic locked directory'),{code:'EPERM'});}});
+  await assert.rejects(f.agent.reply(input),/CODEX_TIMEOUT/);
+  assert.equal(removals,10);assert.equal(f.agent.health().lastError,'CODEX_TIMEOUT');assert.equal(f.agent.health().cleanupError,'CODEX_CLEANUP_FAILED');
+});
+
+test('failed cleanup rejects otherwise successful inference, while cancellation keeps its original code',async t=>{
+  const removeImpl=async()=>{throw Object.assign(new Error('synthetic denied cleanup'),{code:'EACCES'});};
+  const f=await fixture(t,({child})=>emitReply(child),{removeImpl});await assert.rejects(f.agent.reply(input),/CODEX_CLEANUP_FAILED/);
+  assert.equal(f.agent.health().lastError,'CODEX_CLEANUP_FAILED');
+  const g=await fixture(t,()=>{},{removeImpl}),controller=new AbortController();controller.abort();
+  await assert.rejects(g.agent.reply(input,{signal:controller.signal}),/CODEX_CANCELLED/);assert.equal(g.agent.health().lastError,'CODEX_CANCELLED');
+});
+
+test('a completed single turn settles and terminates its owned exec even if the CLI never closes',async t=>{
+  const f=await fixture(t,({child})=>{
+    child.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(valid)}})+'\n');
+    child.stdout.write(JSON.stringify({type:'turn.completed'})+'\n');
+  },{timeoutMs:1000});
+  assert.deepEqual(await f.agent.reply(input),{...valid,engine:'codex-cli'});
+  const execution=f.calls.find(call=>call.args[0]==='exec');assert.equal(execution.child.killed,true);assert.deepEqual(await readdir(f.root),[]);
+});
+
+test('natural CLI close remains preferred and trailing invalid events after completion fail closed',async t=>{
+  const natural=await fixture(t,({child})=>emitReply(child));await natural.agent.reply(input);
+  assert.equal(natural.calls.find(call=>call.args[0]==='exec').child.killed,false);
+  for(const event of [{type:'item.started',item:{type:'command_execution'}},{type:'error',message:'private provider text'},{type:'turn.started'},{type:'item.completed',item:{type:'agent_message',text:JSON.stringify(valid)}}]){
+    const f=await fixture(t,({child})=>{
+      child.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(valid)}})+'\n'+JSON.stringify({type:'turn.completed'})+'\n');
+      setTimeout(()=>child.stdout.write(JSON.stringify(event)+'\n'),20);
+    });
+    await assert.rejects(f.agent.reply(input),error=>/^CODEX_/.test(error.message)&&!error.message.includes('private provider text'));
+    assert.equal(f.calls.find(call=>call.args[0]==='exec').child.killed,true);assert.deepEqual(await readdir(f.root),[]);
+  }
+});
+
+test('a hanging completed turn still rejects invalid sources and completion without a preceding answer',async t=>{
+  for(const events of [
+    [{type:'item.completed',item:{type:'agent_message',text:JSON.stringify({...valid,sourceIds:['invented']})}},{type:'turn.completed'}],
+    [{type:'turn.completed'}],
+  ]){
+    const f=await fixture(t,({child})=>{child.stdout.write(events.map(event=>JSON.stringify(event)+'\n').join(''));},{timeoutMs:1000});
+    await assert.rejects(f.agent.reply(input),/AI_UNGROUNDED_RESPONSE|CODEX_INCOMPLETE/);assert.deepEqual(await readdir(f.root),[]);
+  }
 });

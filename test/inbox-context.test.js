@@ -52,7 +52,7 @@ test('authenticated inbox routes and SSE share the card session, emit only chang
   const call=(path,method='GET',input,originHeader=origin)=>fetch(base+path,{method,headers:{Cookie:cookie,Origin:originHeader,'Content-Type':'application/json'},body:input?JSON.stringify(input):undefined});
   assert.equal((await call('/inbox/config','PUT',{enabled:true,automaticKnowledge:false},'https://unrelated.test')).status,403);
   assert.equal((await call('/inbox/config','PUT',{enabled:true,automaticKnowledge:false})).status,200);
-  assert.equal((await call('/training','POST',{text:'這是待確認的商戶資料'})).status,201);
+  assert.equal((await call('/inbox/faq','POST',{question:'合成待確認問題',answer:'這是待確認的商戶資料',approved:false})).status,201);
   assert.equal((await call('/trial','POST',{text:'測試',history:[]})).status,409);assert.equal(modelCalls,0);
   const stream=await call('/inbox/events');assert.match(stream.headers.get('content-type'),/text\/event-stream/);
   const reader=stream.body.getReader();await reader.read();

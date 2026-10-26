@@ -7,6 +7,7 @@ import { normalizeEvent } from './evolution.js';
 import { createDotTasks } from './dot-tasks.js';
 import { createWebChat } from './web-chat.js';
 import { createInboxContext } from './inbox-context.js';
+import { createKnowledgeLearning } from './knowledge-learning.js';
 import identity from '../agent.json' with { type: 'json' };
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
@@ -38,6 +39,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   const sessions = new Map(); const failures = new Map();
   const dotTasks = workbench ? createDotTasks(store) : null;
   const inboxContext = workbench ? createInboxContext({store,engine}) : null;
+  const knowledgeLearning = workbench ? createKnowledgeLearning({store,engine}) : null;
   const eventStreams = new Set();
   engine.webChatEnabled = webChatEnabled;
   const webChat = createWebChat({ store, engine, cookieSecure, enabled: webChatEnabled });
@@ -156,6 +158,26 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           profile:store.value('profile'),settings:store.value('settings'),knowledge:store.all('SELECT * FROM knowledge ORDER BY created_at DESC'),
           training:store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 40) ORDER BY id'),connections:{...workbench.status(),webChat:{enabled:webChatEnabled,path:'/chat'}},
         });
+        if(knowledgeLearning&&path==='/api/workbench/knowledge-learning'){
+          if(method==='GET')return json(res,200,knowledgeLearning.status());
+          if(method==='PUT'){
+            const input=await body(req);
+            if(input.consent!==true||Object.keys(input).some(key=>!['automaticAnalysis','consent'].includes(key)))throw new ServiceError('請確認是否由模型整理已送出的人工對話。');
+            knowledgeLearning.configure(input);return json(res,200,knowledgeLearning.status());
+          }
+        }
+        if(knowledgeLearning&&path==='/api/workbench/knowledge-learning/collect'&&method==='POST'){
+          await body(req);knowledgeLearning.collect();return json(res,200,knowledgeLearning.status());
+        }
+        const learningCase=path.match(/^\/api\/workbench\/knowledge-learning\/cases\/([\w-]+)\/analyze$/);
+        if(knowledgeLearning&&learningCase&&method==='POST'){
+          await body(req);const result=knowledgeLearning.analyze(learningCase[1]);return json(res,202,result);
+        }
+        const learningProposal=path.match(/^\/api\/workbench\/knowledge-learning\/proposals\/([\w-]+)\/(approve|reject)$/);
+        if(knowledgeLearning&&learningProposal&&method==='POST'){
+          const input=await body(req);const result=learningProposal[2]==='approve'?knowledgeLearning.approve(learningProposal[1],input):knowledgeLearning.reject(learningProposal[1]);
+          return json(res,200,result);
+        }
         if (workbench && path === '/api/workbench/profile' && method === 'PUT') {
           const input=await body(req),p=input.profile||{},s=input.settings||{};
           const profile={name:string(p.name,80,false),industry:string(p.industry,80,false),service:string(p.service,500,false),instructions:string(p.instructions,2000,false),tone:choice(p.tone,['friendly','formal'])};
@@ -166,12 +188,12 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           const text=string((await body(req)).text,2000);
           if(store.get('SELECT count(*) AS n FROM knowledge').n>=100)throw new ServiceError('已達 100 條記憶，請先整理舊記憶。');
           const history=store.all('SELECT role,content FROM (SELECT * FROM training_turns ORDER BY id DESC LIMIT 12) ORDER BY id');
-          let learned;try{learned=engine.inboxPolicy().enabled?{remember:true,title:text.slice(0,28),category:'general',content:text,text:'已保存原文為待確認記憶；直接回覆請另外建立已確認問題與答案。'}:await engine.agent.learn(text,history);}catch{throw new ServiceError('訓練未完成，沒有新增記憶。請檢查 AI 接駁後再試。',502);}
+          let learned;try{learned=await engine.agent.learn(text,history);}catch{throw new ServiceError('訓練未完成，沒有新增記憶。請檢查 AI 接駁後再試。',502);}
           const id=randomUUID();
           store.transaction(()=>{
             if(learned.remember){
               if(store.get('SELECT count(*) AS n FROM knowledge').n>=100)throw new ServiceError('已達 100 條記憶，請先整理。');
-              store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)',id,learned.title,learned.category,learned.content,0,null,Date.now());store.revise();
+              store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)',id,learned.title,learned.category,learned.content,0,null,Date.now());
             }
             store.run('INSERT INTO training_turns(role,content,created_at) VALUES (?,?,?)','user',text,Date.now());
             store.run('INSERT INTO training_turns(role,content,created_at) VALUES (?,?,?)','assistant',learned.text,Date.now());
@@ -225,14 +247,14 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if (path === '/api/knowledge' && method === 'POST') {
           const input = await body(req);
-          const title = string(input.title,100), content = string(input.content,2000), category = choice(input.category,['price','hours','refund','general']);
+          const title = string(input.title,100), content = string(input.content,2000), category = choice(input.category,['price','hours','refund','general','style','procedure']);
           const expires = input.expiresAt ? Date.parse(string(input.expiresAt,40)) : null;
           if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now())) throw new ServiceError('有效期必須是未來日期。');
           if (store.get('SELECT count(*) AS n FROM knowledge').n >= 100) throw new ServiceError('第一版最多保存 100 條資料，請先整理舊資料。');
           const id = randomUUID();
           store.transaction(() => {
             store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)', id, title, category, content, input.approved === true ? 1 : 0, expires, Date.now());
-            store.revise(); store.audit(input.approved === true ? 'knowledge_approved' : 'knowledge_proposed', id);
+            if(input.approved===true)store.revise(); store.audit(input.approved === true ? 'knowledge_approved' : 'knowledge_proposed', id);
           });
           return json(res, 201, { id });
         }
@@ -243,7 +265,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
           if (method === 'POST' && item.expires_at && item.expires_at <= Date.now()) throw new ServiceError('資料已過期，請新增已更新的版本。');
           const edit=method==='PUT'?await body(req):null;
           const updated=edit?string(edit.content,2000):null;
-          const category=edit?choice(edit.category??item.category,['general','hours','price','refund','style']):null;
+          const category=edit?choice(edit.category??item.category,['general','hours','price','refund','style','procedure']):null;
           store.transaction(() => {
             if(method==='PUT')store.run('UPDATE knowledge SET content=?,category=?,approved=0 WHERE id=?',updated,category,id);
             else
@@ -300,6 +322,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   });
   server.requestTimeout = 15000; server.headersTimeout = 10000;
   const closeServer=server.close.bind(server);
-  server.close=(...args)=>{for(const close of [...eventStreams])close();return closeServer(...args);};
+  server.close=(...args)=>{knowledgeLearning?.stop();for(const close of [...eventStreams])close();return closeServer(...args);};
+  if(runtimeMode&&knowledgeLearning)server.on('listening',()=>knowledgeLearning.start());
   return server;
 }

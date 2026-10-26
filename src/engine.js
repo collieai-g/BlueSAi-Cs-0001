@@ -66,7 +66,7 @@ export class Engine {
     if(!input||/退款|退貨|refund|例外|exception|真人|人工|投訴/iu.test(input.content))return;
     const matches=this.store.all(`SELECT k.* FROM faq_rules r JOIN knowledge k ON k.id=r.knowledge_id
       WHERE r.normalized_question=? AND k.approved=1 AND (k.expires_at IS NULL OR k.expires_at>?)`,normalizeFaqQuestion(input.content),this.now());
-    if(matches.length!==1||matches[0].category==='refund'||matches[0].category==='style'||
+    if(matches.length!==1||['refund','style','procedure'].includes(matches[0].category)||
       this.store.get("SELECT message_id FROM self_test_reply_links WHERE input_message_id=? AND grant_id=? AND kind='faq'",input.id,scope.grantId))return;
     const messageId=this.store.addMessage(c.id,'assistant',matches[0].content,{status:'queued',sources:[matches[0].id],decision:'answer',engine:'self-test-knowledge'});
     this.store.run('INSERT INTO self_test_reply_links VALUES (?,?,?,?,?,?)',messageId,input.id,scope.grantId,input.provider_id,'faq','self-faq-'+input.id);
@@ -94,7 +94,7 @@ export class Engine {
     const link=this.store.get('SELECT * FROM self_test_reply_links WHERE message_id=?',m.id),scope=this.selfTestReplyStatus(c);
     const facts=new Map(this.store.facts(this.now()).map(f=>[f.id,f]));
     const sources=JSON.parse(m.sources),policy=this.inboxPolicy();
-    const sourceOkay=m.role==='staff'||(sources.length>0&&sources.every(id=>facts.has(id)&&!['refund','style'].includes(facts.get(id).category)));
+    const sourceOkay=m.role==='staff'||(sources.length>0&&sources.every(id=>facts.has(id)&&!['refund','style','procedure'].includes(facts.get(id).category)));
     const stateOkay=m.role==='staff'?c.state==='self_human':c.state==='self_auto'&&scope.automaticFaq&&policy.enabled&&policy.automaticKnowledge;
     if(!scope.eligible||!link||link.grant_id!==scope.grantId||!stateOkay||!sourceOkay||m.version!==c.version||m.config_version!==this.store.value('revision')||!this.selfReplySender){
       this.store.run("UPDATE messages SET status='cancelled' WHERE id=?",m.id);return;
@@ -200,7 +200,7 @@ export class Engine {
       const category = /退款|退貨|refund/iu.test(question) ? 'refund' : 'general';
       this.store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)', knowledgeId, question.slice(0,100), category, answer, input.approved ? 1 : 0, null, now);
       this.store.run('INSERT INTO faq_rules VALUES (?,?,?,?,?)', id, knowledgeId, question, normalized, now);
-      this.store.revise(); this.store.audit(input.approved ? 'faq_approved' : 'faq_proposed', id);
+      if(input.approved)this.store.revise(); this.store.audit(input.approved ? 'faq_approved' : 'faq_proposed', id);
       return { id, knowledgeId, question, answer, approved: input.approved };
     });
   }
@@ -218,6 +218,7 @@ export class Engine {
     let reason = forcedReason;
     if (!reason && (/退款|退貨|refund|例外|exception/iu.test(message.content) || matches.some(row=>row.category==='refund'))) reason = 'knowledge_requires_human';
     if (!reason && matches.length !== 1) reason = matches.length ? 'knowledge_conflict' : 'knowledge_missing';
+    if (!reason && matches.some(row=>['style','procedure'].includes(row.category))) reason = 'knowledge_missing';
     if (reason === 'knowledge_missing' && this.inboxPolicy().aiFallback && this.agent.configured) {
       this.openWindow(c.id, message.id, this.now());
       if (scheduleAi) this.store.run('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?)', message.id, c.id, c.version, 'pending', Date.now());
@@ -455,7 +456,8 @@ export class Engine {
           let result=validateReply(payload,facts,resultEngine||agent.provider||'openai');
           const currentFacts = new Map(this.store.facts().filter(f=>f.category!=='style').map(f=>[f.id,f]));
           const inputFacts = new Map(facts.filter(f=>f.category!=='style').map(f=>[f.id,f]));
-          if (result.sourceIds.some(id=>!inputFacts.has(id)||!currentFacts.has(id)||currentFacts.get(id).content!==inputFacts.get(id).content)) throw new Error('STALE_GENERATION_SOURCE');
+          const references=[...result.sourceIds,...(result.procedureIds||[])];
+          if (references.some(id=>!inputFacts.has(id)||!currentFacts.has(id)||currentFacts.get(id).content!==inputFacts.get(id).content)) throw new Error('STALE_GENERATION_SOURCE');
           const refundSource=result.sourceIds.some(id=>currentFacts.get(id).category==='refund');
           if(refundSource)result={text:'這項退換安排需要由本人核對。',decision:'handoff',sourceIds:[],engine:result.engine};
           const settings = this.store.value('settings');
@@ -469,7 +471,7 @@ export class Engine {
           }
           this.store.addMessage(c.id, 'assistant', result.text, {
             status: result.decision === 'handoff' ? 'draft' : canAuto ? 'queued' : 'draft',
-            sources: result.sourceIds, decision: result.decision, engine: result.engine,
+            sources: [...new Set([...result.sourceIds,...(result.procedureIds||[])])], decision: result.decision, engine: result.engine,
           });
           if (result.decision === 'handoff') this.store.audit(refundSource ? 'knowledge_requires_human' : 'agent_requests_human', c.id);
         }
@@ -550,7 +552,8 @@ export class Engine {
     const validFacts = new Map(this.store.facts().map(f => [f.id,f]));
     const sources=JSON.parse(m.sources);
     const expiredSource = m.role === 'assistant' && sources.some(id => !validFacts.has(id));
-    if (!stateOkay || nativeDisabled || m.version !== c.version || m.config_version !== this.store.value('revision') || expiredSource) {
+    const unsupportedAnswer=m.role==='assistant'&&m.decision==='answer'&&!sources.some(id=>validFacts.has(id)&&!['style','procedure'].includes(validFacts.get(id).category));
+    if (!stateOkay || nativeDisabled || m.version !== c.version || m.config_version !== this.store.value('revision') || expiredSource || unsupportedAnswer) {
       this.store.run("UPDATE messages SET status='cancelled' WHERE id=?", m.id); return;
     }
     // Recheck source categories at submission, including explicitly approved
