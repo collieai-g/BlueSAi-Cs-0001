@@ -71,6 +71,12 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         try { event = normalizeEvent(payload, engine.evolution.instance); }
         catch { throw new ServiceError('訊息事件無效。'); }
         if (event.kind === 'ignore') return json(res, 200, { ignored: event.reason });
+        if (event.kind === 'self_test') {
+          const channel = workbench?.status?.().whatsapp;
+          if (!runtimeMode || channel?.localTest !== true || channel.inboxScope?.includeSelfTests !== true) throw new ServiceError('尚未開啟本機 WhatsApp 自傳測試。',403);
+          const result = engine.receiveSelfTest(event);
+          return json(res, 200, { received: true, duplicate: result.duplicate, selfTest: true, customerAcceptance: false });
+        }
         if (event.kind === 'receipt') {
           const results = event.receipts.map(receipt => engine.recordReceipt(receipt));
           return json(res, 200, { received: true, receiptCount: results.length });
@@ -119,7 +125,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if (workbench && path === '/api/workbench/inbox' && method === 'GET') {
           const status=engine.inboxStatus();
-          const conversations=store.conversations().filter(c=>['evolution','web'].includes(c.channel));
+          const conversations=store.conversations().filter(c=>['evolution','web','whatsapp_self_test'].includes(c.channel));
           const actualIds=new Set(conversations.map(c=>c.id));
           const pendingHandoffs=status.pending.filter(t=>actualIds.has(t.conversationId));
           return json(res,200,{...status,conversations,pendingHandoffs,pendingCount:pendingHandoffs.length,revision:store.value('revision')});
