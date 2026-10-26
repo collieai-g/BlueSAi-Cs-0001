@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,7 +19,7 @@ async function fixture(t, options={}) {
   const mappingRequests=[];
   const loadAuth=async()=>({state:{creds:{registered:false,me:{id:linkedAddress}},keys:{}},saveCreds:async()=>{}});
   const bridge=createLocalBridge({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,allowTestActivation:true,flushIntervalMs:60000,
-    makeSocket:config=>{socket={ev:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
+    makeSocket:config=>{socket={ev:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);socket.providerConfig=config;return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
     fetchImpl:async(url,init)=>{callbacks.push({url,init});return new Response('{}');},...options});
   await new Promise(resolve=>bridge.server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+bridge.server.address().port;
@@ -51,13 +52,13 @@ test('local bridge starts idle, authenticates owner API and never invents a QR',
   assert.equal(f.bridge.status().qrAvailable,false);
 });
 
-test('empty allowlist and history/placeholder events never forward customer data',async t=>{
+test('empty allowlist and old or undated recovered events never forward customer data',async t=>{
   const f=await fixture(t);await f.connect();await f.register();
   f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message()]});
   await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,0);
   await f.allow([number],false);
-  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('history')]});
-  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'placeholder',messages:[f.message('spoof')]});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('history',{messageTimestamp:1})]});
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'placeholder',messages:[f.message('spoof',{messageTimestamp:1})]});
   f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('undated',{messageTimestamp:undefined}),f.message('old',{messageTimestamp:1})]});
   await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,0);
   assert.equal(f.bridge.status().webhook.pending,0);
@@ -207,7 +208,7 @@ test('all-private inbox receives unlisted fresh direct texts and verified LIDs w
     f.message('media',{message:{imageMessage:{caption:'［合成測試］不轉送媒體'}}}),
     f.message('old',{messageTimestamp:1}),
   ]});
-  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('history')]});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('history',{messageTimestamp:1})]});
   await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();await f.bridge.flush();
   assert.equal(f.callbacks.length,2);
   assert.deepEqual(f.callbacks.map(c=>JSON.parse(c.init.body).data.key.id),['all-direct','all-lid']);
@@ -408,4 +409,137 @@ test('a persisted broad receive grant cannot transfer to another or unresolved l
   second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('unresolved-owner')]});
   await new Promise(resolve=>setImmediate(resolve));await second.bridge.flush();
   assert.equal(second.callbacks.length,0);assert.equal(second.bridge.status().inboxScope.mode,'test');
+});
+
+test('fresh offline append and recovered real text are accepted once within account consent, including the consent second',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  const path=`/instance/inboxScope/${instance}`;
+  const consentSecond=Math.floor(f.message().messageTimestamp);
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  assert.equal((await f.api(`/message/sendText/${instance}`,'POST',{number,text:'test',linkPreview:false})).status,403);
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('offline-new',{messageTimestamp:consentSecond})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'synthetic-pdo-request-sensitive',messages:[f.message('offline-new',{messageTimestamp:consentSecond})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.callbacks.length,1);
+  f.advance(2000);
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'synthetic-pdo-other',messages:[f.message('recovered-new',{messageTimestamp:consentSecond+1})]});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[
+    f.message('before-consent',{messageTimestamp:consentSecond-1}),f.message('old-history',{messageTimestamp:1}),
+    f.message('future',{messageTimestamp:consentSecond+100}),f.message('missing-date',{messageTimestamp:undefined}),
+  ]});
+  f.socket.ev.emit('messages.upsert',{type:'history',messages:[f.message('history-event')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,2);assert.equal(JSON.parse(f.callbacks[1].init.body).data.key.id,'recovered-new');
+  const d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.queued.incoming,2);assert.equal(d.queued.duplicate,1);assert.equal(d.upserts.requestId,2);
+  assert.equal(d.rejected.stale,4);assert.equal(d.rejected.eventType,1);assert.equal(f.calls.length,0);
+});
+
+test('ephemeral plain and extended text are received while view-once and media wrappers stay unsupported',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[
+    f.message('ephemeral-plain',{message:{ephemeralMessage:{message:{conversation:'［合成測試］限時文字'}}}}),
+    f.message('ephemeral-extended',{message:{ephemeralMessage:{message:{ephemeralMessage:{message:{extendedTextMessage:{text:'［合成測試］限時長文字'}}}}}}}),
+    f.message('view-once',{message:{viewOnceMessage:{message:{conversation:'［合成測試］不轉送單次內容'}}}}),
+    f.message('ephemeral-media',{message:{ephemeralMessage:{message:{imageMessage:{caption:'［合成測試］不轉送圖片'}}}}}),
+  ]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,2);assert.deepEqual(f.callbacks.map(c=>JSON.parse(c.init.body).data.key.id),['ephemeral-plain','ephemeral-extended']);
+  assert.equal(f.bridge.status().receiveDiagnostics.rejected.nonText,2);assert.equal(f.calls.length,0);
+});
+
+test('receive diagnostics identify rejected shapes without recording content or identity',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();await f.allow([number],false);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[
+    f.message('invalid-key',{key:{id:'invalid-key',remoteJid:address}}),
+    f.message('stale-key',{messageTimestamp:1}),
+    f.message('not-text',{message:{audioMessage:{url:'synthetic-private-media-url'}}}),
+    f.message('oversize',{message:{conversation:'x'.repeat(4001)}}),
+    f.message('unmapped-key',{key:{id:'unmapped-key',remoteJid:'999999999@lid',fromMe:false}}),
+    f.message('other-person',{key:{id:'other-person',remoteJid:'85255550999@s.whatsapp.net',fromMe:false}}),
+  ]});
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('old-append',{messageTimestamp:1})]});
+  f.socket.ev.emit('messages.upsert',{type:'other',messages:[f.message('unknown-event')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  const d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.scope,'process');assert.equal(d.upserts.events,3);assert.equal(d.upserts.notify,1);assert.equal(d.upserts.append,1);assert.equal(d.upserts.other,1);
+  assert.equal(d.rejected.invalidKey,1);assert.equal(d.rejected.stale,2);assert.equal(d.rejected.nonText,1);assert.equal(d.rejected.oversize,1);assert.equal(d.rejected.unmapped,1);assert.equal(d.rejected.outOfScope,1);assert.equal(d.rejected.eventType,1);
+  assert.doesNotMatch(JSON.stringify(d),/8525555|synthetic-private|invalid-key|unknown-event|@|apikey|conversation|audioMessage/);
+  d.rejected.stale=999;assert.equal(f.bridge.status().receiveDiagnostics.rejected.stale,2);
+  assert.equal(f.callbacks.length,0);
+});
+
+test('receive diagnostics distinguish queued deduplication and callback failure from eventual success',async t=>{
+  let failing=true;
+  const f=await fixture(t,{fetchImpl:async()=>{if(failing)throw Error('synthetic-private-error-must-not-be-returned');return new Response('{}');}});
+  await f.connect();await f.register();await f.allow([number],false);
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('diagnostic-incoming'),f.message('diagnostic-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  let d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.queued.incoming,1);assert.equal(d.queued.duplicate,1);assert.equal(d.callbacks.failure,1);assert.equal(d.callbacks.success,0);assert.equal(typeof d.callbacks.lastFailureAt,'number');
+  failing=false;f.advance(2000);await f.bridge.flush();d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.callbacks.success,1);assert.equal(typeof d.callbacks.lastSuccessAt,'number');
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'synthetic-private-request',messages:[f.message('diagnostic-incoming')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();d=f.bridge.status().receiveDiagnostics;
+  assert.equal(d.queued.duplicate,2);assert.equal(d.callbacks.success,1);assert.equal(d.upserts.requestId,1);
+  assert.doesNotMatch(JSON.stringify(d),/synthetic-private|diagnostic-incoming|8525555|@|error-must/);
+});
+
+test('raw hosted private JIDs reach SDK canonicalization but never bypass final private-phone validation',async t=>{
+  const f=await fixture(t);
+  await f.connect();await f.register();
+  const providerConfig=f.socket.providerConfig;
+  for(const jid of [number+'@hosted',number+':3@hosted',number+'_128:3@hosted','123456789@hosted.lid','123456789:3@hosted.lid'])assert.equal(providerConfig.shouldIgnoreJid(jid),false);
+  for(const jid of ['123456789@g.us','status@broadcast','1234@newsletter','13135550000@bot','server@hosted','1234@hosted.lid.evil'])assert.equal(providerConfig.shouldIgnoreJid(jid),true);
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('raw-not-canonical',{key:{id:'raw-not-canonical',remoteJid:number+'@hosted',fromMe:false}}),f.message('sdk-canonical-private')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,1);assert.equal(JSON.parse(f.callbacks[0].init.body).data.key.id,'sdk-canonical-private');
+  assert.equal(f.bridge.status().receiveDiagnostics.rejected.unmapped,1);
+});
+
+test('one malformed upsert item never aborts valid messages later in the same batch',async t=>{
+  const f=await fixture(t);await f.connect();await f.register();
+  await f.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[null,undefined,42,[],f.message('valid-after-malformed')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(f.callbacks.length,1);assert.equal(JSON.parse(f.callbacks[0].init.body).data.key.id,'valid-after-malformed');
+  assert.equal(f.bridge.status().receiveDiagnostics.rejected.invalidKey,4);assert.equal(f.bridge.status().receiveDiagnostics.queued.incoming,1);
+});
+
+test('same-account grant refresh preserves unsent deduplicated bodies, while a concurrent revoke cannot resurrect them',async t=>{
+  let failing=true,forwarded=0;
+  const f=await fixture(t,{fetchImpl:async()=>{if(failing)throw Error('synthetic callback unavailable');forwarded++;return new Response('{}');}});
+  await f.connect();await f.register();const path=`/instance/inboxScope/${instance}`;
+  const originalSecond=Math.floor(f.message().messageTimestamp);
+  await f.api(path,'PUT',{mode:'all_private_text',consent:true});
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('unsent-refresh-body',{messageTimestamp:originalSecond})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.bridge.status().webhook.pending,1);
+  await f.api(path,'PUT',{mode:'all_private_text',replyToReceived:true,consent:true});
+  assert.equal(f.bridge.status().webhook.pending,1);
+  failing=false;f.advance(2000);await f.bridge.flush();assert.equal(forwarded,1);
+  f.socket.ev.emit('messages.upsert',{type:'notify',requestId:'synthetic-recovery',messages:[f.message('unsent-refresh-body',{messageTimestamp:originalSecond})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(forwarded,1);
+  failing=true;
+  f.socket.ev.emit('messages.upsert',{type:'notify',messages:[f.message('pending-before-revoke')]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();assert.equal(f.bridge.status().webhook.pending,1);
+  let heldRequest;
+  const heldResponse=new Promise((resolve,reject)=>{
+    heldRequest=httpRequest(f.base+path,{method:'PUT',headers:{apikey:key,'Content-Type':'application/json'}},res=>{
+      let data='';res.setEncoding('utf8');res.on('data',chunk=>data+=chunk);res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(data)}));
+    });heldRequest.on('error',reject);heldRequest.write('{"mode":');
+  });
+  t.after(()=>heldRequest.destroy());
+  while(f.bridge.status().inboxScope.mode!=='test')await new Promise(resolve=>setImmediate(resolve));
+  failing=false;await f.bridge.flush();assert.equal(forwarded,1);assert.equal(f.bridge.status().webhook.pending,1);
+  assert.equal(f.bridge.status().inboxScope.replyToReceived,false);
+  assert.equal((await f.api(path,'PUT',{mode:'test',consent:true})).status,200);
+  assert.equal(f.bridge.status().webhook.pending,0);f.advance(2000);
+  assert.equal((await f.api(path,'PUT',{mode:'all_private_text',consent:true})).status,200);
+  heldRequest.end('"all_private_text","consent":true}');assert.equal((await heldResponse).status,409);
+  f.socket.ev.emit('messages.upsert',{type:'append',messages:[f.message('old-after-revoke',{messageTimestamp:originalSecond})]});
+  await new Promise(resolve=>setImmediate(resolve));await f.bridge.flush();
+  assert.equal(forwarded,1);assert.equal(f.bridge.status().webhook.pending,0);assert.equal(f.bridge.status().inboxScope.mode,'all_private_text');
 });

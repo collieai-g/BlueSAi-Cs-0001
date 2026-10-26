@@ -12,7 +12,17 @@ const equal = (a,b) => typeof a==='string' && typeof b==='string' && Buffer.byte
 const fail = (message,status=400) => Object.assign(new Error(message),{status});
 const json = (res,status,value) => { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(value)); };
 const object = value => value && typeof value==='object' && !Array.isArray(value);
-const normalizedUser = jid => typeof jid==='string'?jid.replace(/^(\d+):\d+@(s\.whatsapp\.net|lid)$/,'$1@$2'):'';
+const normalizedUser = jid => typeof jid==='string'?jid.replace(/^(\d+)(?:_\d+)?(?::\d+)?@(s\.whatsapp\.net|lid|hosted|hosted\.lid)$/,'$1@$2'):'';
+function plainText(content){
+  // Baileys emits raw upserts before normalizing disappearing-message wrappers.
+  // Unwrap only ephemeral text; never unwrap view-once, media or edited content.
+  for(let depth=0;depth<5&&object(content);depth++){
+    if(content.viewOnceMessage||content.viewOnceMessageV2||content.viewOnceMessageV2Extension||content.documentWithCaptionMessage||content.editedMessage||content.imageMessage||content.videoMessage||content.audioMessage||content.documentMessage)return undefined;
+    if(content.ephemeralMessage){content=content.ephemeralMessage.message;continue;}
+    return content.conversation??content.extendedTextMessage?.text;
+  }
+  return undefined;
+}
 
 export function validateNumbers(value) {
   if (!Array.isArray(value) || value.length>3 || value.some(number=>typeof number!=='string'||!phonePattern.test(number)) || new Set(value).size!==value.length) throw fail('請填寫最多三個含國家／地區碼的測試電話號碼。');
@@ -84,7 +94,8 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     CREATE TABLE IF NOT EXISTS bridge_config(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS callback_outbox(id TEXT PRIMARY KEY,event_key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS local_sends(id TEXT PRIMARY KEY,address TEXT NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS observed_inbox_contacts(address TEXT PRIMARY KEY,account TEXT NOT NULL,last_at INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS observed_inbox_contacts(address TEXT PRIMARY KEY,account TEXT NOT NULL,last_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS observed_message_events(event_key TEXT PRIMARY KEY,created_at INTEGER NOT NULL);`);
   const config=key=>{const r=db.prepare('SELECT value FROM bridge_config WHERE key=?').get(key);return r?JSON.parse(r.value):null;};
   const setConfig=(key,value)=>db.prepare('INSERT INTO bridge_config VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value));
   const identity={instance,callback:webhookUrl||''};
@@ -96,18 +107,27 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   const savedInboxScope=config('inbox_scope');
   let inboxAccount=typeof savedInboxScope?.account==='string'&&phonePattern.test(savedInboxScope.account)?savedInboxScope.account:null;
   let inboxMode=savedInboxScope?.mode==='all_private_text'&&Number.isSafeInteger(savedInboxScope.consentedAt)&&inboxAccount?'all_private_text':'test',inboxGeneration=0,inboxReplyEnabled=false;
+  let inboxConsentedAt=inboxMode==='all_private_text'?savedInboxScope.consentedAt:null;
+  let testConsentedAt=Number.isSafeInteger(config('test_consented_at'))?config('test_consented_at'):now();
   if(savedInboxScope?.mode==='all_private_text'&&inboxMode!=='all_private_text')setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});
   let webhookEnabled=Boolean(expectedWebhook&&config('webhook_enabled'));
   let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
-  let ignored=0,reconnectAttempt=0,sendsThisMinute=0,sendWindow=now(),mappingState='not_requested',mappingGeneration=0,testChanging=false;
+  let ignored=0,reconnectAttempt=0,sendsThisMinute=0,sendWindow=now(),mappingState='not_requested',mappingGeneration=0,testChanging=false,scopeChanging=0,scopeBaseline=null;
+  // Process-local metadata only: never retain message text, keys, names, JIDs,
+  // phone numbers, QR material or provider exception strings in diagnostics.
+  const diagnostics={scope:'process',startedAt:now(),upserts:{events:0,notify:0,append:0,other:0,requestId:0,messageCount:0,lastAt:null},
+    rejected:{eventType:0,requestId:0,invalidKey:0,stale:0,nonText:0,oversize:0,unmapped:0,outOfScope:0,self:0,knownEcho:0,contextChanged:0,scopeClosed:0},
+    queued:{incoming:0,outgoing:0,duplicate:0,lastAt:null},callbacks:{success:0,failure:0,lastSuccessAt:null,lastFailureAt:null},lastRejection:{reason:null,at:null}};
+  const receiveDiagnostics=()=>({...diagnostics,upserts:{...diagnostics.upserts},rejected:{...diagnostics.rejected},queued:{...diagnostics.queued},callbacks:{...diagnostics.callbacks},lastRejection:{...diagnostics.lastRejection}});
+  function reject(reason,count=1){diagnostics.rejected[reason]+=count;diagnostics.lastRejection={reason,at:now()};}
   const inboxScope=()=>{if(inboxMode==='all_private_text'&&state==='open')inboxAccountValid();return {mode:inboxMode,consented:inboxMode==='all_private_text',supported:['new_private_text'],excluded:['history','groups','broadcasts','self_messages','media'],sendingScope:'test_allowlist',replyScope:'recent_incoming_only',replyToReceived:inboxReplyEnabled,deliveryEnabled:inboxReplyEnabled};};
-  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored});
+  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
   const scoped=address=>recipients.includes(address.split('@')[0]);
   const inboundScoped=address=>phoneJid.test(address)&&(inboxMode==='all_private_text'?inboxAccountValid():scoped(address));
   function inboxAccountValid(){
     if(inboxMode!=='all_private_text'||state!=='open')return false;
     if(inboxAccount&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===inboxAccount)return true;
-    inboxMode='test';inboxAccount=null;inboxGeneration++;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
+    inboxMode='test';inboxAccount=null;inboxConsentedAt=null;scopeBaseline=null;inboxGeneration++;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
     setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});lastReason='inbox_account_changed';purgeOutOfScope();
     return false;
   }
@@ -167,14 +187,20 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   }
   function queue(event,eventKey,data,sourceScope) {
     const payload={event,instance,data,...(sourceScope==='all_private_text'?{sourceScope}: {})};
-    db.prepare('INSERT OR IGNORE INTO callback_outbox(id,event_key,payload,next_at,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),eventKey,JSON.stringify(payload),now(),now());
+    const insert=()=>db.prepare('INSERT OR IGNORE INTO callback_outbox(id,event_key,payload,next_at,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),eventKey,JSON.stringify(payload),now(),now()).changes>0;
+    if(event!=='messages.upsert')return insert();
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      const unseen=db.prepare('INSERT OR IGNORE INTO observed_message_events VALUES (?,?)').run(eventKey,now()).changes>0;
+      const added=unseen&&insert();db.exec('COMMIT');return added;
+    }catch(error){db.exec('ROLLBACK');throw error;}
   }
   async function flush() {
-    if(stopped||flushBusy||!webhookEnabled||!expectedWebhook)return;
+    if(stopped||flushBusy||scopeChanging||!webhookEnabled||!expectedWebhook)return;
     flushBusy=true;
     try {
       // Drain a bounded batch so a burst does not wait one second per message.
-      for(let batch=0;batch<25&&!stopped&&webhookEnabled;batch++){
+      for(let batch=0;batch<25&&!stopped&&webhookEnabled&&!scopeChanging;batch++){
         const row=db.prepare('SELECT * FROM callback_outbox WHERE next_at<=? ORDER BY created_at LIMIT 1').get(now());
         if(!row)return;
         // Revoked queued bodies must never be forwarded on a later retry.
@@ -186,37 +212,49 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         try {
           const response=await fetchImpl(expectedWebhook.url,{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),headers:{...expectedWebhook.headers,'Content-Type':'application/json'},body:row.payload});
           if(!response.ok)throw Error();
+          diagnostics.callbacks.success++;diagnostics.callbacks.lastSuccessAt=now();
           db.prepare('DELETE FROM callback_outbox WHERE id=?').run(row.id);
         } catch {
+          diagnostics.callbacks.failure++;diagnostics.callbacks.lastFailureAt=now();
           db.prepare('UPDATE callback_outbox SET attempts=attempts+1,next_at=? WHERE id=?').run(now()+Math.min(60000,1000*2**Math.min(row.attempts,6)),row.id);
         }
       }
     } finally {flushBusy=false;}
   }
   async function onMessages(event,expectedEpoch) {
-    if(!event||event.type!=='notify'||event.requestId||!Array.isArray(event.messages))return;
-    if(inboxMode==='all_private_text'&&!inboxAccountValid()){ignored+=event.messages.length;return;}
-    if(inboxMode==='test'&&!recipients.length){ignored+=event.messages.length;return;}
+    diagnostics.upserts.events++;diagnostics.upserts.lastAt=now();
+    diagnostics.upserts[event?.type==='notify'?'notify':event?.type==='append'?'append':'other']++;
+    const count=Array.isArray(event?.messages)?event.messages.length:0;
+    diagnostics.upserts.messageCount+=count;if(event?.requestId)diagnostics.upserts.requestId++;
+    if(!event||!['notify','append'].includes(event.type)||!Array.isArray(event.messages)){reject('eventType',count);return;}
+    if(scopeChanging){reject('scopeClosed',count);return;}
+    if(inboxMode==='all_private_text'&&!inboxAccountValid()){ignored+=count;reject('scopeClosed',count);return;}
+    if(inboxMode==='test'&&!recipients.length){ignored+=count;reject('outOfScope',count);return;}
     const receivedGeneration=inboxGeneration;
     for(const message of event.messages){
+      if(!object(message)){reject('invalidKey');continue;}
       const id=message.key?.id,fromMe=message.key?.fromMe;
-      if(typeof id!=='string'||!id||id.length>300||typeof fromMe!=='boolean')continue;
+      if(typeof id!=='string'||!id||id.length>300||typeof fromMe!=='boolean'){reject('invalidKey');continue;}
       // Known bot echoes never masquerade as a phone-side human takeover.
-      if(fromMe&&db.prepare('SELECT id FROM local_sends WHERE id=?').get(id))continue;
+      if(fromMe&&db.prepare('SELECT id FROM local_sends WHERE id=?').get(id)){reject('knownEcho');continue;}
       const seconds=Number(message.messageTimestamp);
       // Validate freshness and text before resolving the identity of an arrival.
-      if(!Number.isFinite(seconds)||seconds*1000<now()-300000||seconds*1000>now()+60000)continue;
-      const content=message.message?.conversation??message.message?.extendedTextMessage?.text;
-      if(typeof content!=='string'||!content.trim()||content.length>4000){ignored++;continue;}
+      const consentedAt=inboxMode==='all_private_text'?inboxConsentedAt:testConsentedAt;
+      if(!Number.isFinite(seconds)||seconds*1000<now()-300000||seconds*1000>now()+60000||seconds<Math.floor(consentedAt/1000)){reject('stale');continue;}
+      const content=plainText(message.message);
+      if(typeof content!=='string'||!content.trim()||content.length>4000){ignored++;reject(typeof content==='string'&&content.length>4000?'oversize':'nonText');continue;}
       const address=await phoneAddress(message.key);
-      if(stopped||expectedEpoch!==epoch||receivedGeneration!==inboxGeneration)return;
-      if(!address||(fromMe===false?!inboundScoped(address):inboxMode==='all_private_text'?!(inboxAccountValid()&&recentIncoming(address)):!scoped(address))){ignored++;continue;}
-      if(inboxMode==='all_private_text'&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===address.split('@')[0]){ignored++;continue;}
+      if(stopped||expectedEpoch!==epoch||receivedGeneration!==inboxGeneration){reject('contextChanged');return;}
+      if(!address){ignored++;reject('unmapped');continue;}
+      const ownAddress=inboxMode==='all_private_text'&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===address.split('@')[0];
+      if(fromMe===false?!inboundScoped(address):inboxMode==='all_private_text'?!(inboxAccountValid()&&recentIncoming(address)):!scoped(address)){ignored++;reject(ownAddress?'self':'outOfScope');continue;}
+      if(ownAddress){ignored++;reject('self');continue;}
       if(!fromMe){
         const account=resolveLinkedPhone(socket,linkedAuthState,normalizeJid);
         if(account)db.prepare('INSERT INTO observed_inbox_contacts(address,account,last_at) VALUES (?,?,?) ON CONFLICT(address) DO UPDATE SET account=excluded.account,last_at=CASE WHEN account=excluded.account THEN MAX(last_at,excluded.last_at) ELSE excluded.last_at END').run(address,account,Math.min(now(),seconds*1000));
       }
-      queue('messages.upsert',`message:${id}`,{key:{id,remoteJid:address,fromMe},messageTimestamp:seconds,message:{conversation:content},pushName:typeof message.pushName==='string'?message.pushName.slice(0,100):'WhatsApp 來訊'},inboxMode);
+      const inserted=queue('messages.upsert',`message:${id}`,{key:{id,remoteJid:address,fromMe},messageTimestamp:seconds,message:{conversation:content},pushName:typeof message.pushName==='string'?message.pushName.slice(0,100):'WhatsApp 來訊'},inboxMode);
+      if(inserted){diagnostics.queued[fromMe?'outgoing':'incoming']++;diagnostics.queued.lastAt=now();}else diagnostics.queued.duplicate++;
     }
   }
   async function onUpdates(updates,expectedEpoch) {
@@ -238,7 +276,10 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       const auth=await loadAuth(resolve(dataDir,'auth'));
       if(stopped||current!==epoch)throw fail('接駁服務已停止。',503);
       linkedAuthState=auth.state;
-      const candidate=makeSocket({auth:auth.state,logger,markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,shouldIgnoreJid:jid=>!phoneJid.test(normalizeJid(jid))&&!/^\d+@lid$/.test(normalizeJid(jid)),getMessage:async()=>undefined});
+      // The SDK applies this raw-node filter before cleanMessage canonicalizes
+      // hosted private addresses. Let only its recognized private hosted forms
+      // reach that canonicalizer; final forwarding still requires verified PN.
+      const candidate=makeSocket({auth:auth.state,logger,markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,shouldIgnoreJid:jid=>{const value=normalizeJid(jid);return !phoneJid.test(value)&&!/^\d+@lid$/.test(value)&&!/^([1-9]\d{7,14})@hosted$/.test(value)&&!/^\d+@hosted\.lid$/.test(value);},getMessage:async()=>undefined});
       socket=candidate;
       candidate.ev.on('creds.update',()=>{if(current!==epoch||stopped)return;saveChain=saveChain.then(()=>auth.saveCreds()).catch(()=>{if(current!==epoch||stopped)return;lastReason='credential_save_failed';state='close';sendEnabled=false;inboxReplyEnabled=false;candidate.end(new Error('credential_save_failed'));});});
       candidate.ev.on('messages.upsert',event=>{if(current===epoch&&!stopped)onMessages(event,current).catch(()=>{lastReason='incoming_mapping_failed';});});
@@ -278,10 +319,14 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(path===`/instance/inboxScope/${instance}`){
         if(req.method==='GET')return json(res,200,inboxScope());
         if(req.method==='PUT'){
+          const previousConsent=scopeChanging?scopeBaseline:inboxMode==='all_private_text'&&inboxAccountValid()?{account:inboxAccount,at:inboxConsentedAt}:null;
+          if(!scopeChanging)scopeBaseline=previousConsent;
+          scopeChanging++;let committedGeneration=null;
           // A failed or revoked reconfiguration closes both the broad receive
           // grant and the sender before awaiting request body or provider state.
-          inboxMode='test';inboxAccount=null;const changeGeneration=++inboxGeneration;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
-          setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});purgeOutOfScope();
+          inboxMode='test';inboxAccount=null;inboxConsentedAt=null;const changeGeneration=++inboxGeneration;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
+          try{
+          setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});
           const input=await body(req);
           if(changeGeneration!==inboxGeneration)throw fail('收件範圍在核對期間已改變，請重新讀取。',409);
           if(!['test','all_private_text'].includes(input.mode)||input.consent!==true)throw fail('請明確確認只接收新私人文字訊息的範圍。',409);
@@ -289,10 +334,16 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
           if(input.mode==='all_private_text'&&(stopped||state!=='open'||!webhookEnabled))throw fail('請先確認手機已連接及收件網址已核對，才開放所有新私人文字來訊。',409);
           const account=input.mode==='all_private_text'?resolveLinkedPhone(socket,linkedAuthState,normalizeJid):null;
           if(input.mode==='all_private_text'&&!account)throw fail('尚未核對已連結帳戶身份，不能開放此帳戶的收件箱。',409);
-          inboxMode=input.mode;inboxGeneration++;
-          inboxAccount=account;setConfig('inbox_scope',{mode:inboxMode,consentedAt:inboxMode==='all_private_text'?now():null,account});
+          if(input.mode!=='all_private_text'||!previousConsent||previousConsent.account!==account){scopeBaseline=null;purgeOutOfScope();}
+          inboxMode=input.mode;committedGeneration=++inboxGeneration;
+          inboxAccount=account;inboxConsentedAt=inboxMode==='all_private_text'?(previousConsent?.account===account?previousConsent.at:now()):null;
+          setConfig('inbox_scope',{mode:inboxMode,consentedAt:inboxConsentedAt,account});
           inboxReplyEnabled=input.replyToReceived===true;
           return json(res,200,inboxScope());
+          }catch(error){
+            if(inboxGeneration===changeGeneration||inboxGeneration===committedGeneration){inboxMode='test';inboxAccount=null;inboxConsentedAt=null;scopeBaseline=null;sendEnabled=false;inboxReplyEnabled=false;setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});purgeOutOfScope();}
+            throw error;
+          }finally{scopeChanging--;if(!scopeChanging){scopeBaseline=null;purgeOutOfScope();}}
         }
       }
       if(path===`/instance/testRecipients/${instance}`){
@@ -300,7 +351,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         if(req.method==='PUT'){
           // "Only these test phones" revokes broad reception as well as sending,
           // including malformed/failed writes and concurrent reconfiguration.
-          sendEnabled=false;inboxReplyEnabled=false;inboxMode='test';inboxAccount=null;mappingGeneration++;inboxGeneration++;
+          sendEnabled=false;inboxReplyEnabled=false;inboxMode='test';inboxAccount=null;inboxConsentedAt=null;scopeBaseline=null;mappingGeneration++;inboxGeneration++;
           setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});purgeOutOfScope();
           if(testChanging)throw fail('正在核對測試範圍，請稍候。',409);testChanging=true;
           try{
@@ -314,7 +365,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
             }
             if(state==='open'&&numbers.length)await prepareMappings(numbers);
             if(input.activateSending===true&&(stopped||state!=='open'||epoch!==activationEpoch||socket!==activationSocket))throw fail('連線在核對期間有變，尚未開啟發送，請重新檢查手機。',409);
-            recipients=numbers;inboxGeneration++;setConfig('recipients',recipients);sendEnabled=input.activateSending===true;if(!numbers.length)mappingState='not_requested';purgeOutOfScope();
+            recipients=numbers;inboxGeneration++;setConfig('recipients',recipients);testConsentedAt=now();setConfig('test_consented_at',testConsentedAt);sendEnabled=input.activateSending===true;if(!numbers.length)mappingState='not_requested';purgeOutOfScope();
             return json(res,200,status().testMode);
           }finally{testChanging=false;}
         }
