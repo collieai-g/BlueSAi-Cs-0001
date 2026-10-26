@@ -4,11 +4,11 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { Store } from './store.js';
-import { createAgent } from './agent.js';
+import { createCodexAgent } from './codex-agent.js';
 import { createEvolution } from './evolution.js';
 import { Engine } from './engine.js';
 import { createApp } from './server.js';
-import { createConnections } from './connections.js';
+import { createConnections, createRuntimeAgent } from './connections.js';
 import identity from '../agent.json' with { type: 'json' };
 
 const [major, minor] = process.versions.node.split('.').map(Number);
@@ -35,12 +35,13 @@ try {
     token = readFileSync(tokenPath,'utf8').trim();
   }
   store = new Store(resolve(dataDir,'service.sqlite'));
-  const agent = createAgent({ apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL });
+  const agent = createRuntimeAgent(store,{apiKey:env.OPENAI_API_KEY,model:env.OPENAI_MODEL});
   const providerConfig = { url: env.EVOLUTION_URL, instance: env.EVOLUTION_INSTANCE, apiKey: env.EVOLUTION_API_KEY, deliveryEnabled: env.DELIVERY_ENABLED === 'true' };
   const evolution = createEvolution(providerConfig);
   engine = new Engine(store, agent, evolution);
   const connections = createConnections({ engine, store, runtime: true, providerConfig,
-    aiConfig: { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL }, publicBaseUrl: env.PUBLIC_BASE_URL, webhookSecret: env.WEBHOOK_SECRET, localWhatsAppTest: env.LOCAL_WHATSAPP_TEST === 'true' });
+    aiConfig: { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL }, publicBaseUrl: env.PUBLIC_BASE_URL, webhookSecret: env.WEBHOOK_SECRET, localWhatsAppTest: env.LOCAL_WHATSAPP_TEST === 'true',
+    nativeAgentFactory:()=>createCodexAgent({executable:env.BLUESAI_CODEX_BIN||'codex',runtimeDir:resolve(dataDir,'codex-jobs')}) });
   server = createApp({ store, engine, adminToken: token, webhookSecret: env.WEBHOOK_SECRET, cookieSecure: env.COOKIE_SECURE === 'true', workbench: connections, runtimeMode: true, webChatEnabled: env.WEB_CHAT_ENABLED === 'true' });
   const port = Number(env.PORT || 3100); const host = env.HOST || '127.0.0.1';
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 不正確。');

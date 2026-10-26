@@ -3,9 +3,22 @@ import { createEvolution } from './evolution.js';
 import { ServiceError } from './engine.js';
 import { receiveDiagnostics } from './receive-diagnostics.js';
 
+// A remembered native/cleared selection must never fall back to ambient API
+// credentials on restart. Native CLI access needs a fresh explicit probe.
+export function createRuntimeAgent(store, aiConfig = {}) {
+  const selected=store.value('reply_provider');
+  const allowed=selected.provider==='environment'||(selected.provider==='openai'&&selected.model===aiConfig.model);
+  return createAgent(allowed?aiConfig:{});
+}
+
 // Secrets stay in server memory/environment, never in status or the database.
-export function createConnections({ engine, store, fetchImpl = fetch, runtime = false, providerConfig = {}, aiConfig = {}, publicBaseUrl = '', webhookSecret = '', localWhatsAppTest = false }) {
-  let ai = { status: engine.agent.configured ? 'configured' : 'unconfigured', model: aiConfig.model || '' };
+export function createConnections({ engine, store, fetchImpl = fetch, runtime = false, providerConfig = {}, aiConfig = {}, publicBaseUrl = '', webhookSecret = '', localWhatsAppTest = false, nativeAgentFactory = null }) {
+  const selected=store.value('reply_provider');
+  const requiresCheck=!engine.agent.configured&&['codex-cli','openai'].includes(selected.provider);
+  let ai = { status: engine.agent.configured || (requiresCheck&&selected.provider==='codex-cli') ? 'configured' : 'unconfigured',
+    model: requiresCheck ? (selected.model||'') : (aiConfig.model||engine.agent.model||''),
+    provider:engine.agent.configured ? (engine.agent.provider||'openai') : requiresCheck ? selected.provider : 'none',requiresCheck };
+  const closeAgent = async agent => { try { await agent?.close?.(); } catch { store.audit('reply_provider_close_failed'); } };
   let waSecret = runtime && providerConfig.url && providerConfig.instance && providerConfig.apiKey
     ? { url: providerConfig.url.replace(/\/$/, ''), instance: providerConfig.instance, apiKey: providerConfig.apiKey } : null;
   let wa = waSecret ? { status: 'configured', url: waSecret.url, instance: waSecret.instance } : { status: 'unconfigured' };
@@ -115,7 +128,16 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const activity = waSecret ? store.get('SELECT * FROM channel_activity WHERE instance=?', waSecret.instance) : null;
       const profile = store.value('profile'), settings = store.value('settings');
       const missingFields = engine.inboxPolicy().enabled ? [] : [!profile.name && '商戶名稱', !profile.service && '服務說明', !settings.handoffContact && '人工接手方式'].filter(Boolean);
-      return { mode: runtime ? 'runtime' : 'preview', runtimeName: runtime ? '客服收發執行器' : '隔離本機預覽', publicBaseUrl: callbackUrl ? new URL(callbackUrl).origin : '', ai: { ...ai }, whatsapp: {
+      let health={};
+      if(engine.agent.provider==='codex-cli'&&typeof engine.agent.health==='function'){
+        try{
+          const current=engine.agent.health();
+          if(['configured','connected','error'].includes(current?.status))health.status=current.status;
+          if(Number.isFinite(current?.checkedAt)&&current.checkedAt>=0)health.checkedAt=current.checkedAt;
+          if(typeof current?.lastError==='string'&&/^[A-Z][A-Z0-9_]{0,63}$/.test(current.lastError))health.lastError=current.lastError;
+        }catch{health={status:'error',lastError:'NATIVE_HEALTH_UNAVAILABLE'};}
+      }
+      return { mode: runtime ? 'runtime' : 'preview', runtimeName: runtime ? '客服收發執行器' : '隔離本機預覽', publicBaseUrl: callbackUrl ? new URL(callbackUrl).origin : '', ai: { ...ai,...health,nativeAvailable:runtime&&typeof nativeAgentFactory==='function' }, whatsapp: {
         ...wa, receiveEnabled: Boolean(runtime && engine.evolution.configured && webhookSecret), deliveryEnabled: Boolean(runtime && engine.evolution.deliveryEnabled),
         webhook: { configured: webhookConfigured(), registered: webhookRegistered, verifiedAt: webhookCheckedAt },
         evidence: { lastIncomingAt: activity?.last_incoming_at || null, lastReceiptAt: activity?.last_receipt_at || null },
@@ -127,10 +149,34 @@ export function createConnections({ engine, store, fetchImpl = fetch, runtime = 
       const candidate = createAgent({ model, apiKey, fetchImpl });
       try { await candidate.reply({ profile: { tone: 'friendly' }, facts: [], history: [{ role: 'user', content: '你好，我想了解服務。' }] }); }
       catch { throw new ServiceError('AI 測試未成功。請檢查金鑰、模型名稱及帳戶額度；模型需支援 Responses 與結構化回覆。', 502); }
-      engine.agent = candidate; ai = { status: 'connected', model, checkedAt: Date.now() }; store.revise();
+      const previous=engine.replaceAgent(candidate,{provider:'openai',model});ai = { status: 'connected', provider:'openai', model, checkedAt: Date.now(),requiresCheck:false };
+      await closeAgent(previous);
       return { message: 'AI 已通過實際回覆測試，可以到「訓練」教客服。' };
     }),
-    clearAI: () => exclusive(async () => { engine.agent = createAgent(); ai = { status: 'unconfigured', model: '' }; store.revise(); }),
+    nativeCodex: input => exclusive(async()=>{
+      if(!runtime||typeof nativeAgentFactory!=='function')throw new ServiceError('這個服務未提供原生 Codex 自動處理。',409);
+      if(!input||input.consent!==true||Object.keys(input).some(key=>key!=='consent'))throw new ServiceError('請確認同意由本機原生 Codex 處理授權的客服文字。');
+      let candidate;
+      try{
+        candidate=await nativeAgentFactory();
+        if(!candidate?.configured||candidate.provider!=='codex-cli'||typeof candidate.check!=='function'||typeof candidate.reply!=='function')throw new Error('INVALID_NATIVE_PROVIDER');
+        await candidate.check();
+      }catch{
+        await closeAgent(candidate);
+        throw new ServiceError('原生 Codex 測試未成功。請在本機核對 CLI、ChatGPT 登入及可用額度後再試；尚未開啟 AI 自動回覆。',502);
+      }
+      let previous;
+      try{previous=engine.replaceAgent(candidate);}catch(error){await closeAgent(candidate);throw error;}
+      ai={status:'connected',provider:'codex-cli',model:'account_default',checkedAt:Date.now(),requiresCheck:false};
+      await closeAgent(previous);
+      return {message:'原生 Codex 已通過登入及實際回覆測試。AI 後備與自動發送須另外啟用。',provider:'codex-cli'};
+    }),
+    clearAI: () => exclusive(async () => {
+      const policy=engine.inboxPolicy();
+      if(policy.aiFallback||policy.automaticAi)engine.configureInbox({...policy,aiFallback:false,automaticAi:false});
+      const previous=engine.replaceAgent(createAgent());ai = { status: 'unconfigured', provider:'none', model: '',requiresCheck:false };
+      await closeAgent(previous);
+    }),
     whatsapp: (input = {}) => exclusive(async () => {
       if (runtime) {
         if (!providerConfig.url || !providerConfig.instance || !providerConfig.apiKey) throw new ServiceError('請先在伺服器秘密設定填寫 Evolution 網址、instance 及 API key，然後重啟。', 409);

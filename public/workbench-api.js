@@ -21,6 +21,7 @@
     memory:(id,action,content,category)=>api('/knowledge/'+encodeURIComponent(id),action==='delete'?'DELETE':action==='edit'?'PUT':'POST',action==='edit'?{content,category}:{}),
     reply:(text,history)=>api('/trial','POST',{text,history:history.slice(-24)}),
     model:input=>api('/connections/model','POST',input),
+    nativeCodex:input=>api('/connections/native-codex','POST',input),
     clearAI:()=>api('/connections/model','DELETE'),
     whatsapp:input=>api('/connections/whatsapp','POST',input),
     checkWhatsApp:()=>api('/connections/whatsapp-check','POST',{}),

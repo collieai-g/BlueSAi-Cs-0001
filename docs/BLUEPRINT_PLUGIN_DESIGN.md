@@ -38,6 +38,8 @@
 
 知識庫中的「教客服」表示用聊天及對答示範建立可檢查的商戶記憶，不是修改模型權重；原文待確認，不自動當作 FAQ。管理保留行業、自訂指令及六種建議回覆模式。WhatsApp 手機與 AI 模型狀態分開呈現；手機燈號按實際連線檢查，沒有模型金鑰不否定手機連線。裝置已連接仍不代表收件、發送開關或送達已驗證。
 
+回覆路線包括 FAQ-only、明確接駁的本機原生 Codex CLI 與選用模型 API。原生 CLI 沿用 ChatGPT 登入及帳戶額度，建立獨立受限工作，不喚醒目前左側聊天；這個「原生」也不表示宿主 renderer／卡片安裝已完成。AI 後備及自動發送需分別確認，不能因測試成功就更改全域政策。詳見 [安裝](INSTALL.md#原生-codex-與選用-api) 與 [收件匣](LIVE_INBOX.md)。
+
 此交互參考 [Zendesk Agent Workspace 官方說明](https://support.zendesk.com/hc/en-us/articles/4408821259930-About-the-Zendesk-Agent-Workspace/) 及[使用者提供的官方示範](https://www.zendesk.hk/demo/) 的同頁對話與上下文方式，不接入 Zendesk 或複製其素材。只呈現本版已有的對話及權限；不加入無後台支援的 CRM、分派、SLA 或結案操作。
 
 ## 固定最小與最大尺寸

@@ -4,7 +4,14 @@
 
 本輪以 [HARNESS_ENGINEERING.md](HARNESS_ENGINEERING.md) 定義產品定位及開發指示：本人、左側 Codex／DOT、右側同一卡片及渠道執行器共同形成客服服務。先對齊一項工作的要求、選定材料、版本、實際能力、成果位置及未完成下一步，再決定補介面、知識、專業方法、工具或後台。
 
-本輪文件基準為 2026-10-26 合併 PR #9 的 main [`1fc0144`](https://github.com/collieai-g/BlueSAi-Cs-0001/commit/1fc0144c86044ed8ef0287da0ec8aeb89385b4c8)，產品仍為 `0.4.0-preview.1`。新的自動檢查入口、場景 runner 與 AI 行為評估列為下一版；本輪沒有新增背景執行器、通用接續接口或私人宿主部署。既有必要測試及發送限制維持。
+原定位文件基準為 PR #9 的 [`1fc0144`](https://github.com/collieai-g/BlueSAi-Cs-0001/commit/1fc0144c86044ed8ef0287da0ec8aeb89385b4c8)。本輪在 PR #10 已合併 main [`37e04b6`](https://github.com/collieai-g/BlueSAi-Cs-0001/commit/37e04b6e3011aebcebeb9b1bab3d78375022559a) 上開發原生 Codex CLI 後備；產品基準 `0.4.0-preview.1`。新自動檢查入口、場景 runner 與 AI 行為評估仍列下一版，既有必要測試照常。這次獨立 CLI 工作不代表目前聊天可自動喚醒、通用背景 DOT、跨 AI 接續或私人宿主／雲端部署已完成。
+
+## 本輪原生 AI 後備
+
+1. 保留 FAQ-first 與 `automaticKnowledge`，新增 `aiFallback=false`／`automaticAi=false` 安全預設。先核對原生 CLI 或選用 API 可用，再由本人分別開啟後備及自動發送；只有有批准來源的 answer 可按渠道授權送出，clarify 先留草稿，退款／衝突／無依據／失敗／逾時轉人工。
+2. 原生模式沿用本機 CLI 的 ChatGPT 登入及帳戶額度，不另要求 API key、不搬 auth。本人同意後做版本／登入與真正合成推理，全部通過才切換 adapter；既有左側 DOT 草稿流程保留。
+3. 每次獨立 ephemeral 生成只給單客有限資料及批准知識，固定 25 秒，關閉 shell、MCP、plugins、hooks、apps、多 agent、電腦／瀏覽器及其他工具；固定 schema 後仍核來源、版本、人工控制、24 小時窗口及渠道範圍。
+4. 先核對本機失敗轉人工、關閉 fallback 的復原及未知發送結果；真實渠道另用另一個已授權帳戶核對收發。CLI 登入、一次合成回覆、程式測試和真正客戶送達各按實際結果記錄，不先寫成全部成功。
 
 ## 目前優先事項：0.4.0-preview.1
 

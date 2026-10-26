@@ -43,7 +43,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   const webChat = createWebChat({ store, engine, cookieSecure, enabled: webChatEnabled });
   if(!/^[a-zA-Z0-9_]+$/.test(sessionCookieName))throw new Error('Invalid cookie name');
   const cookie = (value, age) => `${sessionCookieName}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cookieSecure ? '; Secure' : ''}`;
-  const runtime = () => ({ agent: engine.agent.configured ? 'openai' : 'offline', evolutionConfigured: engine.evolution.configured,
+  const runtime = () => ({ agent: engine.agent.configured ? (engine.agent.provider || 'openai') : 'offline', evolutionConfigured: engine.evolution.configured,
     deliveryEnabled: engine.evolution.deliveryEnabled, liveReady: engine.liveReady(), webhookConfigured: Boolean(webhookSecret) });
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -192,6 +192,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         if(workbench && path.startsWith('/api/workbench/connections/')){
           const action=path.split('/').at(-1);
           if(method==='POST'&&action==='model')return json(res,200,await workbench.model(await body(req)));
+          if(method==='POST'&&action==='native-codex')return json(res,200,await workbench.nativeCodex(await body(req)));
           if(method==='DELETE'&&action==='model'){await workbench.clearAI();return json(res,200,{ok:true});}
           if(method==='POST'&&action==='whatsapp')return json(res,200,await workbench.whatsapp(await body(req)));
           if(method==='POST'&&action==='whatsapp-check')return json(res,200,await workbench.checkWhatsApp());

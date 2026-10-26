@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from '../src/store.js';
 import { Engine } from '../src/engine.js';
 
-const answer = { text: '已確認的示範答案。', decision: 'answer', sourceIds: [], engine: 'mock' };
+const answer = { text: '已確認的示範答案。', decision: 'answer', sourceIds: ['fixture-fact'], engine: 'mock' };
 const immediateAgent = { configured: true, async reply() { return answer; } };
 
 function deferred() {
@@ -19,6 +19,7 @@ function deferred() {
 
 function fixture(t, options = {}) {
   const store = new Store(':memory:');
+  store.run('INSERT INTO knowledge VALUES (?,?,?,?,?,?,?)','fixture-fact','測試依據','general','已確認的示範答案。',1,null,Date.now());
   const sent = [];
   let now = Date.now();
   const provider = options.provider || {
@@ -429,7 +430,7 @@ test('submitted clarification waits for the customer and the next input starts a
   assert.equal(all[1].deadline_at, f.time() + 30_000);
 });
 
-test('independent monitor runs while the worker awaits a model result', async t => {
+test('independent monitor hands off and releases a hung generation without waiting for its late result', async t => {
   const pending = deferred();
   const f = fixture(t, {
     agent: { configured: true, reply: () => pending.promise },
@@ -440,7 +441,8 @@ test('independent monitor runs while the worker awaits a model result', async t 
   f.engine.start();
   const running = f.engine.tick();
   await waitUntil(() => f.store.conversation(r.conversationId).state === 'waiting');
-  assert.equal(f.engine.running, true);
+  await running;
+  assert.equal(f.engine.running, false);
   assert.equal(tasks(f.store, r.conversationId).length, 1);
   pending.resolve(answer);
   await running;

@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 export const defaults = {
   profile: { name: '', industry: '', service: '', instructions: '', tone: 'friendly' },
   settings: { mode: 'review', handoffContact: '' },
-  inbox_policy: { enabled: false, automaticKnowledge: false },
+  inbox_policy: { enabled: false, automaticKnowledge: false, aiFallback: false, automaticAi: false },
+  reply_provider: { provider: 'environment' },
   revision: 1,
 };
 

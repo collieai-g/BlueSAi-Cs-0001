@@ -189,7 +189,7 @@ test('schema five is additive and preserves legacy data, policy and local handof
   try{
     assert.equal(engine.listFaq()[0].answer,'保留答案');
     assert.equal(engine.inboxStatus().pending[0].conversationId,r.conversationId);
-    assert.deepEqual(engine.inboxPolicy(),{enabled:true,automaticKnowledge:true});
+    assert.deepEqual(engine.inboxPolicy(),{enabled:true,automaticKnowledge:true,aiFallback:false,automaticAi:false});
     assert.equal(store.messages(r.conversationId).length,1);
   }finally{await engine.stop();store.close();}
 });

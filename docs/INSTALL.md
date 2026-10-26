@@ -16,7 +16,7 @@
 
 ## 本機執行器
 
-使用 Node.js 24.22+（24.x）。客服核心無第三方 npm 依賴；本機 WhatsApp 橋接的固定依賴在獨立子套件安裝，不更改系統 Node。
+使用 Node.js 24.22+（24.x）。客服核心無第三方 npm 依賴；選用 Codex CLI 須另外準備及核對，本機 WhatsApp 橋接的固定依賴在獨立子套件安裝，不更改系統 Node。
 
 ```sh
 npm start
@@ -37,8 +37,29 @@ npm start
 | `PUBLIC_BASE_URL` | 客服 origin，用來生成固定 callback；同機橋接可用 loopback HTTP |
 | `DELIVERY_ENABLED` | 預設 false，普通渠道發送需明確授權後開啟 |
 | `LOCAL_WHATSAPP_TEST` | 可信本機測試橋接模式；選定測試號碼及本人確認後才啟用程序內測試發送，重啟不沿用啟用狀態 |
-| `OPENAI_API_KEY`／`OPENAI_MODEL` | 選用背景模型；手機連結及人工收發不需要模型金鑰 |
+| `BLUESAI_CODEX_BIN` | 唯一選用的原生 CLI 設定，預設 `codex`；只由伺服器管理員指定可信執行檔，前端不能修改 |
+| `OPENAI_API_KEY`／`OPENAI_MODEL` | 選用模型 API 路線；FAQ-only、原生 ChatGPT CLI、手機連結及人工收發不需要填這些金鑰 |
 | `WEB_CHAT_ENABLED` | 可選網頁客人渠道，與 WhatsApp 驗收分開 |
+
+## 原生 Codex 與選用 API
+
+先在管理選擇回覆路線。FAQ-only 不需要模型；未命中答案時可由本人接手或手動交目前 DOT。原生 Codex CLI 與模型 API 是另外選用的生成 adapter，均不因連線成功就開啟自動回覆。
+
+原生路線適用於已由本人登入 ChatGPT 的可信本機。安裝人員確認可信 `codex` 執行檔，必要時在伺服器設定 `BLUESAI_CODEX_BIN`；這是執行檔路徑，不是可由網頁填入的命令。沿用 CLI 原有登入，不複製、搬移或把 auth 內容交給客服、聊天或公開來源。沒有登入時由本人用官方安全登入流程處理。
+
+Codex 官方說明指出 `exec` 可沿用已保存登入，`--ephemeral` 不保存 session rollout，`--output-schema` 可要求結構化結果；ChatGPT 登入與 API key 是不同的認證／計費路線。原生模式不另要 API key，但使用 ChatGPT／Codex 帳戶額度及其權限，並非無限或免費 API。[官方非互動模式](https://learn.chatgpt.com/docs/non-interactive-mode) · [官方認證](https://learn.chatgpt.com/docs/auth)
+
+在卡片「管理」明確同意原生接駁後，專屬 `POST /api/agents/bluesai-cs-0001/connections/native-codex` 接收 `{consent:true}`。後台依序核對實際 CLI 版本、ChatGPT 登入及一次真正合成回覆；全部成功才切換 adapter。版本／登入存在不等於推理測試成功，合成測試更不等於 WhatsApp 已送達。此步會使用帳戶額度。
+
+接駁測試失敗不切換 adapter，原有接駁與政策仍按先前設定；不要誤以為已改用原生模式。這條路線需真正的客服 runtime；3101 隔離預覽沒有原生自動處理 worker。核心重啟後先讀回目前 adapter 並重新核對接駁及新 AI 授權，不依上一個 CLI 工作或左側聊天接續。
+
+原生工作固定最多 25 秒，沒有 timeout env。臨時 schema 目錄位於倉庫外的 `BLUEPRINT_DATA_DIR/codex-jobs`，工作完成清理；prompt 透過 stdin，不寫到該目錄。使用 `--ignore-user-config`、`--ephemeral` 及固定啟動限制，關閉 shell、apps、MCP、plugins、hooks、多 agent、瀏覽器、電腦、圖片、網頁搜尋與 Skill discovery。只提供單一客戶有限資料，固定 schema 後仍做後台來源與決策驗證；不把 read-only 旗標單獨當成文件隔離。
+
+先維持 `automaticAi=false`，以草稿核對實際生成結果。`aiFallback` 預設 false，啟用需 FAQ 優先 `enabled=true` 且 adapter 可用；`automaticAi` 需先有 fallback。只有有批准來源的 `answer`，且渠道授權、人工狀態、版本、有效來源及最近 24 小時來訊等檢查都通過，才按另一份明確同意自動發送。`clarify` 留草稿；退款／衝突／無依據／失敗／逾時轉人工，未知商戶欄位保持空白。
+
+使用 API 時另在安全設定提供自己的 `OPENAI_API_KEY`／`OPENAI_MODEL`，按 API 額度計費；不把 CLI 登入檔轉成 API 金鑰。當原生登入過期、額度受限、生成或 JSON／來源驗證失敗時，保留工作轉人工。先修正實際缺項再重新測試，不靜默切換付費 API；關閉 fallback 可回到 FAQ-only／人工。
+
+本機電腦、客服核心及渠道橋接必須持續運行，CLI 亦需對外模型連線。這不是雲端部署。將來可選受支援的可信常駐 CLI 環境或獨立模型 API 服務，分開設計認證、額度、儲存、渠道與復原；本機已登入不能代替雲端授權，不將本機 auth 搬到公開 runner 或原始碼倉庫。
 
 ## 真實 WhatsApp 的準備與驗收
 
@@ -67,7 +88,7 @@ npm start
 
 ## 更新及安全停止
 
-升級前正常停止單一程序，備份完整私人資料與渠道登入狀態並驗證還原。schema v1–v4 的增量遷移保留原資料；不把較新資料庫交給舊程式開啟。
+升級前正常停止單一程序，備份完整私人資料與渠道登入狀態並驗證還原。schema v1–v5 的增量遷移保留原資料；新增 AI 政策開關不默默啟用。不要把較新資料庫交給舊程式開啟。
 
 資料目錄的 `service.lock` 記錄擁有程序。異常退出後先核對 PID 已不存在且沒有其他 worker，才人工處理鎖檔；不能自動刪鎖繞過另一個程序。Cookie session 在記憶體內，重啟後重新登入；資料、對話、去重及工作狀態保留。
 
