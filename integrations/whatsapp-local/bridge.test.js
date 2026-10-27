@@ -20,7 +20,7 @@ async function fixture(t, options={}) {
   const mappingRequests=[];
   const loadAuth=async()=>({state:{creds:{registered:false,me:{id:linkedAddress}},keys:{}},saveCreds:async()=>{}});
   const bridge=createLocalBridge({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,allowTestActivation:true,flushIntervalMs:60000,
-    makeSocket:config=>{socket={ev:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);socket.providerConfig=config;return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
+    makeSocket:config=>{socket={ev:new EventEmitter(),ws:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);socket.providerConfig=config;return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
     fetchImpl:async(url,init)=>{callbacks.push({url,init});return new Response('{}');},...options});
   await new Promise(resolve=>bridge.server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+bridge.server.address().port;
@@ -98,6 +98,85 @@ test('bluesai-whatsapp-link-001: repeated restart-required closes stop after fiv
     assert.equal(sockets.length,6);assert.equal(f.bridge.status().instance.state,'close');
     assert.equal(f.bridge.status().testMode.deliveryEnabled,false);
   }finally{t.mock.timers.reset();}
+});
+
+test('bluesai-whatsapp-link-001 stages: new registration exposes only enums and bounded counters',async t=>{
+  const privateValue='synthetic-private-auth-node-qr-error';
+  const f=await fixture(t,{qrWaitMs:0,loadAuth:async()=>({state:{creds:{registered:true,advSecretKey:privateValue},keys:{privateValue}},saveCreds:async()=>{}})});
+  assert.equal(f.bridge.status().connectionDiagnostics.authMode,'not_started');
+  await f.api(`/instance/connect/${instance}`);
+  const untouchedNode=new Proxy({}, {get(){throw new Error('stage counters must never inspect node contents');}});
+  f.socket.ws.emit('CB:iq,,pair-success',untouchedNode);
+  f.socket.ws.emit('CB:notification,type:companion_reg_refresh',untouchedNode);
+  f.socket.ev.emit('connection.update',{qr:privateValue,isNewLogin:true,secret:privateValue});
+  f.socket.ev.emit('connection.update',{connection:'open',secret:privateValue});
+  f.socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{message:privateValue,output:{statusCode:401,payload:privateValue}}}});
+  const result=(await f.api(`/instance/connectionState/${instance}`)).data.connectionDiagnostics;
+  assert.deepEqual(result,{scope:'process',authMode:'new_registration',socketEvents:'available',qrEvents:1,pairSuccess:1,companionRegRefresh:1,isNewLogin:1,open:1,
+    closeCodes:{code401:1,code403:0,code408:0,code411:0,code428:0,code440:0,code500:0,code503:0,code515:0,other:0}});
+  assert.doesNotMatch(JSON.stringify(result),/synthetic-private|registered|advSecret|keys|payload|message/);
+  const validate=value=>{for(const item of Object.values(value)){if(item&&typeof item==='object')validate(item);else assert.ok(typeof item==='string'||Number.isSafeInteger(item)&&item>=0);}};
+  validate(result);
+  result.closeCodes.code401=999;
+  assert.equal(f.bridge.status().connectionDiagnostics.closeCodes.code401,1,'returned nested counters are snapshots');
+});
+
+test('bluesai-whatsapp-link-001 stages: closed and previous-epoch sockets cannot pollute a newer login attempt',async t=>{
+  const f=await fixture(t,{qrWaitMs:0});await f.api(`/instance/connect/${instance}`);
+  const old=f.socket;
+  assert.equal(f.bridge.status().connectionDiagnostics.authMode,'existing_login');
+  old.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  old.ws.emit('CB:iq,,pair-success',{secret:'synthetic-private-old-node'});
+  old.ws.emit('CB:notification,type:companion_reg_refresh',{secret:'synthetic-private-old-node'});
+  old.ev.emit('connection.update',{qr:'synthetic-private-closed-qr',isNewLogin:true,connection:'open'});
+  assert.equal(f.bridge.status().connectionDiagnostics.pairSuccess,0,'a closed socket is no longer the active transport');
+  assert.equal(f.bridge.status().connectionDiagnostics.qrEvents,0);assert.equal(f.bridge.status().connectionDiagnostics.open,0);assert.equal(f.bridge.status().connectionDiagnostics.isNewLogin,0);
+  await f.api(`/instance/connect/${instance}`);
+  const current=f.socket;assert.notEqual(current,old);
+  old.ws.emit('CB:iq,,pair-success',{});old.ws.emit('CB:notification,type:companion_reg_refresh',{});
+  old.ev.emit('connection.update',{qr:'synthetic-private-old-qr',isNewLogin:true,connection:'open'});
+  old.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:515}}}});
+  const before=f.bridge.status().connectionDiagnostics;
+  assert.equal(before.qrEvents,0);assert.equal(before.isNewLogin,0);assert.equal(before.open,0);assert.equal(before.closeCodes.code515,0);assert.equal(before.closeCodes.code401,1);
+  current.ws.emit('CB:iq,,pair-success',{});current.ws.emit('CB:notification,type:companion_reg_refresh',{});
+  current.ev.emit('connection.update',{isNewLogin:true,connection:'open'});
+  const after=f.bridge.status().connectionDiagnostics;
+  assert.equal(after.pairSuccess,1);assert.equal(after.companionRegRefresh,1);assert.equal(after.isNewLogin,1);assert.equal(after.open,1);
+  await f.bridge.close();
+  assert.doesNotThrow(()=>{current.ws.emit('CB:iq,,pair-success',{});current.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:515}}}});});
+});
+
+test('bluesai-whatsapp-link-001 stages: only allowlisted numeric close codes get named buckets',async t=>{
+  for(const code of [401,403,408,411,428,440,500,503,515,999,'401',{private:'synthetic-private-close-code'}]){
+    const f=await fixture(t,{qrWaitMs:0});await f.api(`/instance/connect/${instance}`);
+    f.socket.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:code}}}});
+    const counters=f.bridge.status().connectionDiagnostics.closeCodes;
+    const expected=typeof code==='number'&&[401,403,408,411,428,440,500,503,515].includes(code)?'code'+code:'other';
+    assert.equal(counters[expected],1);assert.equal(Object.values(counters).reduce((sum,count)=>sum+count,0),1);
+    assert.doesNotMatch(JSON.stringify(counters),/synthetic-private|999|private/);
+    await f.bridge.close();
+  }
+});
+
+test('bluesai-whatsapp-link-001 stages: a provider without raw socket events reports unavailable',async t=>{
+  const f=await fixture(t,{qrWaitMs:0,makeSocket:()=>({ev:new EventEmitter(),end:()=>{}})});
+  await f.api(`/instance/connect/${instance}`);
+  const result=f.bridge.status().connectionDiagnostics;
+  assert.equal(result.socketEvents,'unavailable');assert.equal(result.pairSuccess,0);assert.equal(result.companionRegRefresh,0);
+});
+
+test('bluesai-whatsapp-link-001 stages: events during shutdown cannot change counters while credential saving drains',async t=>{
+  let releaseSave;
+  const f=await fixture(t,{qrWaitMs:0,loadAuth:async()=>({state:{creds:{},keys:{}},saveCreds:()=>new Promise(resolve=>{releaseSave=resolve;})})});
+  await f.api(`/instance/connect/${instance}`);
+  const current=f.socket;
+  current.ev.emit('creds.update',{});
+  while(!releaseSave)await new Promise(resolve=>setImmediate(resolve));
+  const before=f.bridge.status().connectionDiagnostics,closing=f.bridge.close();
+  current.ws.emit('CB:iq,,pair-success',{});current.ws.emit('CB:notification,type:companion_reg_refresh',{});
+  current.ev.emit('connection.update',{qr:'synthetic-private-shutdown-qr',isNewLogin:true,connection:'open'});
+  current.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  try{assert.deepEqual(f.bridge.status().connectionDiagnostics,before);}finally{releaseSave();await closing;}
 });
 
 test('empty allowlist and old or undated recovered events never forward customer data',async t=>{

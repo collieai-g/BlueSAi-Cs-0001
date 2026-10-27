@@ -128,9 +128,17 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     rejected:{eventType:0,requestId:0,invalidKey:0,stale:0,nonText:0,oversize:0,unmapped:0,outOfScope:0,self:0,knownEcho:0,contextChanged:0,scopeClosed:0},
     queued:{incoming:0,outgoing:0,selfTest:0,duplicate:0,lastAt:null},callbacks:{success:0,failure:0,lastSuccessAt:null,lastFailureAt:null},lastRejection:{reason:null,at:null}};
   const receiveDiagnostics=()=>({...diagnostics,upserts:{...diagnostics.upserts},rejected:{...diagnostics.rejected},queued:{...diagnostics.queued},callbacks:{...diagnostics.callbacks},lastRejection:{...diagnostics.lastRejection}});
+  // Observe only fixed stage categories. Raw node counts are observations, not
+  // proof of successful pairing or refresh handling. No node, auth value or
+  // provider error is copied here, and this never changes the handshake.
+  const linkStages={scope:'process',authMode:'not_started',socketEvents:'not_started',qrEvents:0,pairSuccess:0,companionRegRefresh:0,isNewLogin:0,open:0,
+    closeCodes:{code401:0,code403:0,code408:0,code411:0,code428:0,code440:0,code500:0,code503:0,code515:0,other:0}};
+  const closeStageCodes=new Set([401,403,408,411,428,440,500,503,515]);
+  const incrementStage=(target,key)=>{target[key]=Math.min(Number.MAX_SAFE_INTEGER,target[key]+1);};
+  const connectionDiagnostics=()=>({...linkStages,closeCodes:{...linkStages.closeCodes}});
   function reject(reason,count=1){diagnostics.rejected[reason]+=count;diagnostics.lastRejection={reason,at:now()};}
   const inboxScope=()=>{if(inboxMode==='all_private_text'&&state==='open')inboxAccountValid();return {mode:inboxMode,consented:inboxMode==='all_private_text',includeSelfTests,supported:['new_private_text',...(includeSelfTests?['self_test_text']:[])],excluded:['history','groups','broadcasts',...(includeSelfTests?[]:['self_messages']),'media'],sendingScope:'test_allowlist',replyScope:'recent_incoming_only',replyToReceived:inboxReplyEnabled,deliveryEnabled:inboxReplyEnabled};};
-  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),qrExpiresInMs:qr?Math.max(0,20000-(now()-qrAt)):0,lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
+  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),qrExpiresInMs:qr?Math.max(0,20000-(now()-qrAt)):0,lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics(),connectionDiagnostics:connectionDiagnostics()});
   const scoped=address=>recipients.includes(address.split('@')[0]);
   const inboundScoped=address=>phoneJid.test(address)&&(inboxMode==='all_private_text'?inboxAccountValid():scoped(address));
   function inboxAccountValid(){
@@ -347,17 +355,34 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       const auth=await loadAuth(resolve(dataDir,'auth'));
       if(stopped||current!==epoch)throw fail('接駁服務已停止。',503);
       linkedAuthState=auth.state;
+      linkStages.authMode=auth.state.creds.me==null?'new_registration':'existing_login';
+      linkStages.socketEvents='unavailable';
       // The SDK applies this raw-node filter before cleanMessage canonicalizes
       // hosted private addresses. Let only its recognized private hosted forms
       // reach that canonicalizer; final forwarding still requires verified PN.
       const candidate=makeSocket({auth:auth.state,logger,markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,shouldIgnoreJid:jid=>{const value=normalizeJid(jid);return !phoneJid.test(value)&&!/^\d+@lid$/.test(value)&&!/^([1-9]\d{7,14})@hosted$/.test(value)&&!/^\d+@hosted\.lid$/.test(value);},getMessage:async()=>undefined});
       socket=candidate;
+      if(typeof candidate.ws?.on==='function'){
+        linkStages.socketEvents='available';
+        const observeStage=key=>()=>{if(current===epoch&&!stopped&&socket===candidate)incrementStage(linkStages,key);};
+        candidate.ws.on('CB:iq,,pair-success',observeStage('pairSuccess'));
+        candidate.ws.on('CB:notification,type:companion_reg_refresh',observeStage('companionRegRefresh'));
+      }
       candidate.ev.on('creds.update',()=>{if(current!==epoch||stopped)return;saveChain=saveChain.then(()=>auth.saveCreds()).catch(()=>{if(current!==epoch||stopped)return;closeSelfReply();lastReason='credential_save_failed';state='close';sendEnabled=false;inboxReplyEnabled=false;candidate.end(new Error('credential_save_failed'));});});
       candidate.ev.on('messages.upsert',event=>{if(current===epoch&&!stopped)onMessages(event,current).catch(()=>{lastReason='incoming_mapping_failed';});});
       candidate.ev.on('messages.update',event=>{if(current===epoch&&!stopped)onUpdates(event,current).catch(()=>{lastReason='receipt_mapping_failed';});});
       candidate.ev.on('message-receipt.update',event=>{if(current===epoch&&!stopped)onReceipt(event,current)?.catch(()=>{lastReason='receipt_mapping_failed';});});
       candidate.ev.on('connection.update',update=>{
         if(current!==epoch||stopped)return;
+        if(socket===candidate){
+          if(typeof update.qr==='string')incrementStage(linkStages,'qrEvents');
+          if(update.isNewLogin===true)incrementStage(linkStages,'isNewLogin');
+          if(update.connection==='open')incrementStage(linkStages,'open');
+          if(update.connection==='close'){
+            const code=update.lastDisconnect?.error?.output?.statusCode;
+            incrementStage(linkStages.closeCodes,typeof code==='number'&&closeStageCodes.has(code)?'code'+code:'other');
+          }
+        }
         if(typeof update.qr==='string'){
           const raw=update.qr,generation=++qrGeneration;qr=null;qrAt=0;
           encodeQr(raw).then(image=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting'){qr=image;qrAt=now();}}).catch(()=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting')lastReason='qr_encoding_failed';});
