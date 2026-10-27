@@ -2,6 +2,10 @@
 
 項目名稱：BlueSAI-客服。Agent 編號：`BlueSAi-Cs-#0001`。更改身份資料時，同步 agent.json、介面及文件。
 
+## 共用 Blue-loopback 入口
+
+開發回饋、實測修正、介面回歸及上游交接使用已安裝的 `$blue-loopback` Skill（顯示名稱 Blue-loopback），先從可用 Skill 目錄讀取其 SKILL.md。它透過 Git 外的私人綁定定位唯一 shared harness；本項目沿用 `feedback/harness.json`、`feedback/registry.json` 及 `feedback/installation-loop-001/case.json`，個別問題再讀對應案例。只維護共用 Skill／runner 一份，不把運行工作室補丁複製成另一套來源。Skill 缺失時明列未載入，仍可依 `docs/FEEDBACK_LOOP.md` 完成已授權工作；日常收件、回覆及知識保存不啟動工程 loopback。下列產品與資料保護規則繼續適用。
+
 - 先讀 docs/HARNESS_ENGINEERING.md。產品以「本人＋左側 Codex／DOT＋右側客服卡片＋渠道後台」共同形成服務；以同一客服工作的要求、選定材料、版本、成果、核對與接續為開發單位，不以自研底層模型或照搬獨立客服平台取代此分工。
 - 新功能先區分個人化、專業工作組合及核心能力擴充，重用現有工具與資料邊界。私有工作資料與可重用方法分開；工程回饋依 docs/FEEDBACK_LOOP.md、feedback/registry.json 及 feedback/harness.json，重用外置共用 runner；AI 行為評估仍待後續，既有必要測試與真實渠道驗收照常執行。原生 CLI 是獨立受限生成路線，不是喚醒或控制目前左側聊天、通用背景 DOT 或跨 AI 接續。
 - 回覆路線分為 FAQ-only、本機原生 Codex CLI、選用模型 API。FAQ 優先不需要模型；aiFallback／automaticAi 預設 false，接駁成功不改政策。原生接駁必須由本人同意並通過真合成推理，沿用 CLI 的 ChatGPT 登入與額度，不搬移 auth、不另索 API key。登入可用、生成成功與真正客戶送達分開驗收。
