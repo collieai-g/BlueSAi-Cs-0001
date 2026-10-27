@@ -15,6 +15,7 @@
     "package:release": "node tools/package-release.js",
     "dev": "node --watch src/index.js",
     "test": "node --test --test-concurrency=1 test/*.test.js integrations/whatsapp-local/bridge.test.js",
-    "check": "node tools/check.js"
+    "check": "node tools/check.js",
+    "feedback:audit": "node tools/feedback-audit.js"
   }
 }

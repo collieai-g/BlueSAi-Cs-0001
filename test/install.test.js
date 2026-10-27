@@ -177,6 +177,29 @@ test('public source, blank environment examples and ordinary synthetic fixtures 
   assert.ok(release.inventory.some(row=>row.path==='src/knowledge-learning.js'));assert.ok(release.inventory.some(row=>row.path==='.env.example'));
 });
 
+test('release archive preserves Git blob bytes under a CRLF checkout policy',t=>{
+  const {repo,output,git,run}=packageFixture(t);
+  git('config','core.autocrlf','true');
+  const result=run(output);assert.equal(result.status,0,result.stderr);
+  const release=JSON.parse(readFileSync(resolve(output,'release.json'),'utf8'));
+  const tar=readFileSync(resolve(output,'source.tar')),entries=new Map();
+  for(let offset=0;offset+512<=tar.length;){
+    const header=tar.subarray(offset,offset+512);
+    if(header.every(byte=>byte===0))break;
+    const name=header.subarray(0,100).toString().replace(/\0.*$/s,'');
+    const size=parseInt(header.subarray(124,136).toString().replace(/\0.*$/s,'').trim()||'0',8);
+    const prefix=header.subarray(345,500).toString().replace(/\0.*$/s,'');
+    if(header[156]===0||header[156]===48)entries.set(prefix?prefix+'/'+name:name,tar.subarray(offset+512,offset+512+size));
+    offset+=512+Math.ceil(size/512)*512;
+  }
+  for(const file of release.inventory){
+    assert.ok(entries.has(file.path),file.path);
+    assert.equal(createHash('sha256').update(entries.get(file.path)).digest('hex'),file.sha256,file.path);
+  }
+  assert.equal(entries.get('sample.txt').toString(),'synthetic source\n');
+  assert.equal(git('config','core.autocrlf'),'true');
+});
+
 test('tracked private runtime and customer-export paths block release before any artifact directory exists',t=>{
   const f=packageFixture(t),marker='SYNTHETIC_PRIVATE_FILE_NOT_FOR_RELEASE';let n=0;
   for(const path of [

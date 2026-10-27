@@ -2,36 +2,50 @@
   "contract_version": 1,
   "case_id": "bluesai-whatsapp-link-001",
   "project_id": "bluesai-cs-0001",
-  "title": "WhatsApp 連結失敗診斷、二維碼生命週期及有界重連",
+  "title": "連線診斷、QR 生命週期及可逆重新配對",
   "source_revision": "df37caad532300c4bdf2c03c3d0b371be4c7db27",
   "observations": [
     {
       "id": "fixed-connection-reason",
       "classification": "product_bug",
-      "status": "synthetic_regression",
-      "summary": "核心未呈現橋接的固定連線失敗類別，登入失效與等待二維碼共用重取提示。合成狀態驗證 allowlist 與敏感欄位排除。",
-      "private_evidence_required": false
+      "disposition": "candidate_fix",
+      "summary": "以固定類別區分登入失效與等待取碼，排除敏感原始錯誤。"
     },
     {
       "id": "stale-qr-visibility",
       "classification": "product_bug",
-      "status": "synthetic_regression",
-      "summary": "卡片在關閉或不可用狀態仍可能保留原二維碼。合成 DOM 驗證取碼、失敗、狀態核對及到期只移除原圖，不自動連線。",
-      "private_evidence_required": false
+      "disposition": "candidate_fix",
+      "summary": "失效、關閉及到期移除 QR；不因畫面到期自行建立連線。"
     },
     {
       "id": "qr-encoding-generation",
       "classification": "product_bug",
-      "status": "synthetic_regression",
-      "summary": "較舊的異步二維碼編碼可能覆蓋新碼；舊編碼失敗亦可覆蓋目前狀態。以合成 deferred encoder 驗證最新 generation。",
-      "private_evidence_required": false
+      "disposition": "candidate_fix",
+      "summary": "舊異步編碼不得覆蓋最新 QR 狀態。"
     },
     {
       "id": "restart-required-bound",
       "classification": "product_bug",
-      "status": "synthetic_regression",
-      "summary": "515 分支未增加重試計數，原五次上限不適用。合成 socket 及 fake timer 驗證最多五次自動重連。",
-      "private_evidence_required": false
+      "disposition": "candidate_fix",
+      "summary": "包括 515 的重試均受有限次數限制。"
+    },
+    {
+      "id": "stage-counters",
+      "classification": "verification_gap",
+      "disposition": "candidate_fix",
+      "summary": "以有限枚舉及計數描述註冊階段，不暴露帳戶或 QR。"
+    },
+    {
+      "id": "revoked-auth-reused",
+      "classification": "process_gap",
+      "disposition": "candidate_fix",
+      "summary": "維護工具在程序停止及備份覆蓋後保留舊 auth，準備新配對；同操作可接續。"
+    },
+    {
+      "id": "initial-provider-401",
+      "classification": "client_compatibility_gap",
+      "disposition": "external_validation",
+      "summary": "供應商拒絕的真正原因未證實；新配對成功不能證明特定 SDK 或帳戶類型缺陷。"
     }
   ],
   "expected": [
@@ -42,9 +56,16 @@
     "包括 515 的自動重連最多五次，open 後才重設",
     "收件、發送及知識政策保持原有獨立授權"
   ],
-  "required_checks": ["npm_test", "npm_check"],
+  "required_checks": [
+    "test_channels",
+    "test_ui",
+    "npm_check",
+    "relink_regression"
+  ],
   "required_attestations": [],
   "public_status": "candidate_not_submitted",
   "instance_status": "external_private_evidence_only",
-  "scope": "只有通用候選及合成回歸；不判定 provider 登入拒絕根因、帳戶類型相容性、真實手機連結、私人部署或送達。"
+  "scope": "合併診斷、QR 與可逆 relink 的通用範圍；舊 shared proposal 是歷史子範圍，不沿用舊收據證明擴大後範圍。供應商根因、真手機、私人部署與送達各自驗收。",
+  "registry": "feedback/registry.json",
+  "scope_revision": 2
 }

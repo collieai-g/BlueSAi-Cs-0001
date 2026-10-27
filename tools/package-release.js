@@ -35,7 +35,9 @@ try {
   if(!packageBytes)throw new Error('Pinned source does not contain the release manifest.');
   const pkg=JSON.parse(packageBytes.toString('utf8'));
   mkdirSync(target,{recursive:true,mode:0o700});
-  execFileSync('git',['archive','--format=tar','--output',resolve(target,'source.tar'),revision],{cwd:root,stdio:['ignore','pipe','pipe']});
+  // The archive must contain the same blob bytes as inventory, including on
+  // Windows hosts whose user-level checkout policy enables CRLF conversion.
+  execFileSync('git',['-c','core.autocrlf=false','archive','--format=tar','--output',resolve(target,'source.tar'),revision],{cwd:root,stdio:['ignore','pipe','pipe']});
   const release={schema_version:1,id:pkg.id,version:pkg.version,channel:pkg.channel,source:{repository:pkg.repository,revision},host_contract:pkg.host_contract,capabilities:pkg.modes,artifacts:[{path:'source.tar',sha256:sha256(readFileSync(resolve(target,'source.tar')))}],inventory,evidence:{scope:'CI and repository tests; live host/channel acceptance is separate',tests:['npm test','npm run check'],results:'See CI run for this exact source revision; generation alone does not attest test success.'}};
   writeFileSync(resolve(target,'release.json'),JSON.stringify(release,null,2)+'\n',{flag:'wx',mode:0o600});
   process.stdout.write(JSON.stringify({revision,version:pkg.version,channel:pkg.channel,output:resolve(target),artifacts:release.artifacts})+'\n');

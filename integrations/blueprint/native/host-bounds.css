@@ -1,0 +1,8 @@
+/* Host-owned bounds; component rules remain rooted at #cs-card-design. */
+.bluesai-native-card{padding:0;border:0;box-shadow:none;min-width:0;max-width:100%;width:360px;overflow:auto}
+.bluesai-native-card[data-bluesai-mode="expanded"]{width:864px;max-width:100%}
+.bluesai-native-card #cs-card-design .bp-card-surface{max-width:none}
+.bluesai-native-card #cs-card-design .bp-agent-card{max-width:none;width:100%}
+.page-layout-content>.bluesai-native-card{width:100%;max-width:none}
+.bluesai-native-card #cs-card-design .bp-config-content{max-height:min(850px,calc(100vh - 170px));min-height:240px}
+@media(max-width:600px){.bluesai-native-card{width:100%}.bluesai-native-card #cs-card-design .bp-config-content{max-height:none;min-height:0;overflow:visible}}

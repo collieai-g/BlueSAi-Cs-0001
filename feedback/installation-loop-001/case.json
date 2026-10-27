@@ -1,0 +1,21 @@
+{
+  "contract_version": 1,
+  "case_id": "installation-loop-001",
+  "project_id": "bluesai-cs-0001",
+  "title": "已知安裝與回覆流程的統一工程回饋",
+  "source_revision": "df37caad532300c4bdf2c03c3d0b371be4c7db27",
+  "registry": "feedback/registry.json",
+  "required_checks": [
+    "test_core",
+    "test_ui",
+    "test_install",
+    "test_channels",
+    "npm_check",
+    "feedback_audit",
+    "relink_regression"
+  ],
+  "required_attestations": [],
+  "public_status": "candidate_not_submitted",
+  "instance_status": "external_private_evidence_only",
+  "scope": "本案例只認證固定輸入的工程回歸與問題映射；registry 列出的宿主依賴、真實縮放、渠道及各實例更新另行驗收。"
+}

@@ -3,7 +3,7 @@
 項目名稱：BlueSAI-客服。Agent 編號：`BlueSAi-Cs-#0001`。更改身份資料時，同步 agent.json、介面及文件。
 
 - 先讀 docs/HARNESS_ENGINEERING.md。產品以「本人＋左側 Codex／DOT＋右側客服卡片＋渠道後台」共同形成服務；以同一客服工作的要求、選定材料、版本、成果、核對與接續為開發單位，不以自研底層模型或照搬獨立客服平台取代此分工。
-- 新功能先區分個人化、專業工作組合及核心能力擴充，重用現有工具與資料邊界。私有工作資料與可重用方法分開；新自動檢查及測試 harness 列為下一版，既有必要測試與真實渠道驗收仍照常執行。原生 CLI 是獨立受限生成路線，不是喚醒或控制目前左側聊天、通用背景 DOT 或跨 AI 接續。
+- 新功能先區分個人化、專業工作組合及核心能力擴充，重用現有工具與資料邊界。私有工作資料與可重用方法分開；工程回饋依 docs/FEEDBACK_LOOP.md、feedback/registry.json 及 feedback/harness.json，重用外置共用 runner；AI 行為評估仍待後續，既有必要測試與真實渠道驗收照常執行。原生 CLI 是獨立受限生成路線，不是喚醒或控制目前左側聊天、通用背景 DOT 或跨 AI 接續。
 - 回覆路線分為 FAQ-only、本機原生 Codex CLI、選用模型 API。FAQ 優先不需要模型；aiFallback／automaticAi 預設 false，接駁成功不改政策。原生接駁必須由本人同意並通過真合成推理，沿用 CLI 的 ChatGPT 登入與額度，不搬移 auth、不另索 API key。登入可用、生成成功與真正客戶送達分開驗收。
 - 原生 CLI 每次只給單一客戶有限資料及已批准知識，使用 ephemeral 獨立工作、固定 schema 與後台來源核對；即時回覆推理最多 25 秒，獨立背景教學／對話整理推理最多 60 秒、服務等候含清理最多 65 秒，不延長客戶回覆窗口或阻塞人工發送。關閉 shell、MCP、plugins、hooks、電腦及瀏覽器等工具。執行檔只接受伺服器可信設定，runtime 在 Git 之外；不能讓客戶文字選路徑、開工具、改政策或直接執行渠道動作。
 - 產品是「AI → Agent 工作台」內的一個客服卡片項目。先讀 docs/AGENT_UI_CONTRACT.md 及 docs/BLUEPRINT_PLUGIN_DESIGN.md；精簡入口展開為同一實例的工作區，主要檢視是「收件匣／知識庫／管理」。對話優先；商戶設定、全域回覆政策及渠道教學放在管理，不再把收件匣藏於基本設定。保留舊 basic／training／connect 內部 ID 只作程式相容，不代表舊導覽仍為產品規格。
@@ -25,3 +25,6 @@
 - 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服樣式修改 design/customer-agent-card-design.html 後經建置產生，宿主只載入 agent-card.css 的根節點內樣式。public/style.css 僅供舊診斷頁，不能加入宿主卡片 bundle。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
 - 所有對外狀態必須依實際結果：configured 不是 connected，accepted 不是 delivered，repository written 不是 deployed。
 - 未獲使用者明確授權，不要更改 GitHub 倉庫可見性、覆寫他人提交或加入付費資源。
+
+- 開發回饋以同一 canonical checkout 為準；運行實例來源只讀，通用改動回到本來源。案例 ID 不重建，私人綁定／證據在 Git 之外。執行 npm run feedback:audit，所有來源差異都須映射；100% 映射不代表已部署。
+- 修改生成來源後執行 python tools/build-workbench.py；npm run check 會唯讀核對生成結果。宿主資產只由 tools/build-blueprint-card.py 產生，保留同一對話的開始人工回覆／交回知識庫／AI 語意，不維護第二份介面。

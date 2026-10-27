@@ -81,3 +81,7 @@ npm run check
 模擬測試證明程式在指定條件下的行為；真實手機、收件及送達須保留當次證據。來源固定 commit、GitHub 推送、宿主部署、卡片可見和 WhatsApp 真實收發分別回報。[架構](docs/ARCHITECTURE.md) · [卡片尺寸與原生整合](docs/BLUEPRINT_PLUGIN_DESIGN.md) · [開發次序](docs/DEVELOPMENT_PLAN.md)
 
 密鑰、手機登入狀態、SQLite、日誌、備份及私人部署身份均留在 Git 之外。Blueprint 共用視覺資產與 MIT 聲明保留於 [UI_SOURCE.json](UI_SOURCE.json) 及 `public/vendor/`。
+
+## 統一安裝回饋與更新
+
+開發、實測與更新沿用 [統一回饋流程](docs/FEEDBACK_LOOP.md)、[去識別案例清單](feedback/registry.json) 及 [同實例更新入口](UPDATE_AI.txt)。共用 runner 留在原維護位置，本項目只有薄宣告；客服 UI 由同一設計來源產生。`npm run feedback:audit` 核對已知問題及所有來源差異的去向，不能代替測試、發佈或私人部署。

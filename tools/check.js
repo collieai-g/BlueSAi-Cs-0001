@@ -11,3 +11,7 @@ for (const path of ['src', 'public', 'tools', 'integrations/whatsapp-local'].fla
   if (result.status !== 0) process.exit(result.status || 1);
 }
 console.log('All source, public and tool JavaScript syntax checks passed.');
+const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+const generated = spawnSync(python, ['-B', 'tools/build-workbench.py', '--check'], { stdio: 'inherit' });
+if (generated.error) console.error('Python 3.12+ is required to check generated UI assets.');
+if (generated.status !== 0) process.exit(generated.status || 1);

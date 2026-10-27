@@ -17,6 +17,8 @@ npm run check
 
 新增核心狀態與最小 DOM 行為測試，並在既有 bridge 測試內加入 deferred QR encoder 及 fake timer。全部使用合成資料與獨立臨時目錄／loopback 端口；不連接 WhatsApp、不讀私人登入資料、不操作使用中的服務。
 
-共用 runner 保留在工作區原位置，這裡只有薄案例 manifest，沒有複製另一套 engine。既有 runner 0.1 僅接受 Python argv；本次 Node 檢查由上列原有 npm scripts 執行，不宣稱已透過該 runner 執行。私人收據、日誌與實例綁定另存來源倉庫以外。
+共用 runner 保留在工作區原位置，這裡只有薄案例 manifest，沒有複製另一套 engine。共用 runner 0.2 透過私人 --node 綁定執行 $NODE argv，薄宣告見 ../harness.json；包括 Node 與 relink Python 合成回歸。私人收據、日誌與實例綁定另存來源倉庫以外。
 
 候選回歸、上游提交、正式發行、私人部署及真實手機驗收分開記錄。這份材料不能證明登入拒絕已解決；如需驗證真實手機，沿用原安裝與本人授權，由本人掃碼並另行核對收發。
+
+本案例現為唯一活動宣告，合併舊 shared proposal 的可逆 relink 與來源候選的 QR 診斷觀察。舊收據保留原 scope，不能代替擴大後案例。正式維護工具在 ../../integrations/whatsapp-local/maintenance/；它不隨 UI 自動操作 auth。QR 行為已回寫 design 來源，並由生成回歸防止再次遺失。

@@ -1,26 +1,34 @@
-請把 BlueSAi-Cs-0001 作為我現有 Blueprint Studio「AI → Agent 工作台」內的一個客服卡片項目安裝或更新。
+請把 BlueSAi-Cs-0001 作為我選定 Blueprint Studio「AI → Agent 工作台」內的一個客服卡片項目安裝，並用繁體中文逐步完成。
 來源：https://github.com/collieai-g/BlueSAi-Cs-0001
 
-先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md 及 docs/CODEX_DOT_HANDOFF.md。0.4.0-preview.1 是預覽；固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。
+先沿用我已選定的目標及本機／雲端路線。更新同一客服實例時轉讀 UPDATE_AI.txt；若我明確要求全新安裝並保留舊站，使用獨立服務及空白私人資料位置，舊站不動，不因找到舊站而改做更新，亦不以舊站備份作為新安裝前置條件。
+
+先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md、docs/CODEX_DOT_HANDOFF.md、docs/CONNECTION_GUIDE.md 及 docs/FEEDBACK_LOOP.md。核實真正發佈狀態；0.4.0-preview.1 是預覽。固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。先核對 AI 平台真正載入的工具，不由文件推斷能力；需要本人操作時，只給目前一步的入口、動作及成功標誌。
 
 1. 客服只能是一個已登記 Agent 項目。精簡入口展開為同一實例的收件匣／知識庫／管理工作區，對話優先，設定及渠道教學放在管理；不是再建立另一套客服工作室。只掛載客服根節點及 /api/agents/bluesai-cs-0001；外層導覽、身份及排版由宿主管理。
 
 2. 禁止以整頁客服取代宿主「總覽、工作、資料」、側欄、頂列、全域路由、CSS 或資料庫。不能把舊診斷介面搬進工作室，不代理宿主整個 /api，不直接共用或改寫宿主業務表。只經明確授權的受限整合讀取指定公司來源；客服自己的儲存、設定及對話保持獨立範圍。
 
-3. 沿用已知工作室、公司、GitHub、Site、儲存及原 operation_id。先做只讀 preflight，列出真正宿主合約、renderer、API、執行器及 schema 能力。缺少能力先說明哪項不能運行及下一個可執行步驟，不用整頁、iframe、localhost 或覆蓋宿主主列避開限制。
+3. 沿用已知且已驗證的工作室、公司、GitHub、Site 及儲存。新安裝或新的來源／計劃使用新的 operation_id；同一安裝重試才接續原工作。先做只讀 preflight，列出真正宿主合約、renderer、受限 API、HTTP 方法、執行器及 schema 能力。缺少能力先說明哪項不能運行及下一個可執行步驟，不用整頁、iframe、localhost 或覆蓋宿主主列避開限制。客服元件以 design/customer-agent-card-design.html 及既有獨立模組維護，再由 tools/build-workbench.py 生成；宿主按 card-ui.json 載入固定產物，不再維護另一份客服業務介面。
 
 4. 分開來源已發佈、Agent 已登記、卡片可見、設定已讀回、手機已連結、來訊已保存、provider 接受及真正送達。本次用戶要求真實 WhatsApp 時，完成真實連結裝置／收件／回覆路線；不能用離線問答、模擬 provider 或網頁扮演客人代替。
 
-5. 手機 QR 必須來自真正接駁服務，由本人手機確認及掃碼。先選本人同意的指定測試號碼／allowlist，再核對 callback 及發送範圍；空名單的本機橋接只提供 QR／狀態，不轉送或發送其他客戶訊息。首次可用人工回覆驗證，不要求模型金鑰。自動 AI 另行設定可用模型、批准資料及發送模式。
+5. 手機 QR 必須來自真正接駁服務，由本人使用實際 WhatsApp 或 WhatsApp Business App 確認及掃碼。401／logged_out 先診斷並按保留資料的維護流程處理，不反覆要求掃舊碼，也不由錯誤碼猜測帳號類型或更換 SDK。收件可選本人同意的指定測試號碼，或所有新一對一私人文字；本人要接收所有客戶時，以明確同意設定 all_private_text 並讀回，不強迫逐號加入 allowlist。空 allowlist 只在 test 模式代表未開放其他收件。固定 callback、webhook 驗證與發送範圍分開核對；群組、廣播、媒體及舊歷史不因此自動支援。
 
-6. 使用套件內相容 manifest 與固定來源。已有相同實例時重用原 ID，依 expected_version／CAS 更新並讀回，不重複加卡片。共享 preflight、plan、backup_gate、apply、register_or_update、verify、complete／waiting_user 工作及備份 coverage；同一指示重跑先接續原階段，不重複備份、註冊或部署。
+5a. 首次先驗證人工回覆：啟用知識庫優先，保持 automaticKnowledge、aiFallback、automaticAi 為 false；此人工收件匣路線不要求模型，也不靠代填虛構商戶資料通過。依本人授權開放指定測試發送，或回覆最近 24 小時內主動來訊的客戶。到同一對話按「開始人工回覆」，核對文字與真正手機送達。接收與發送是不同授權。
 
-7. 變更前保存能還原的資料副本，驗證 scope、schema、checkpoint、可讀私人副本及還原結果。D1 備份不涵蓋外部 SQLite 或手機登入狀態。保留既有登入、公司資料、空白欄位、批准／撤銷、人工接手、未完成工作及歷史；不加入虛構商戶資料，不靜默打開自動回覆或對客發送。
+5b. 需要自動回覆才接駁本人選擇的模型。原生 Codex 須本人同意沿用本機 ChatGPT 登入及額度，並通過真正合成推理；再分別保存 aiFallback、automaticAi 及 FAQ 的 automaticKnowledge。人工接手期間 AI 不插入回覆；按「交回知識庫／AI」後以新來訊測試。已確認 FAQ、普通知識及待批准記憶不同；新增普通知識不會自動建立 FAQ，儲存知識亦不主動發訊或重跑舊訊息。FAQ 完整命中、AI 理解不同問法及人工回覆分開驗收。
+
+6. 使用套件內相容 manifest 與固定來源。重用 src/install.js 的 preflight、InstallJournal、備份 coverage，以及 src/install-blueprint.js 的 ensure。相同來源／版本的既有實例重用原 ID，依 expected_version／CAS 更新設定並讀回；不同來源／manifest 遇到 HOST_PACKAGE_UPGRADE_REQUIRED 時先完成相容宿主升級接口，不能新增第二張卡片繞過。共享 preflight、plan、backup_gate、apply、register_or_update、verify、complete／waiting_user 工作；同一操作／計劃重跑先接續原階段，不重複備份、註冊或部署。
+
+7. 變更既有資料前核對真正受影響範圍的可還原副本，驗證 scope、schema、checkpoint、coverage、可讀私人副本及還原結果；完全覆蓋本次狀態的有效收據便重用。D1 備份不涵蓋外部 SQLite 或手機登入狀態，舊備份不涵蓋後來的新資料。保留既有登入、公司資料、空白欄位、批准／撤銷、人工接手、未完成工作及歷史；不加入虛構商戶資料，不靜默打開自動回覆或對客發送。
 
 8. 完整通用 Sites D1／R2 管理 API、收件匣工作區的原生 renderer 及宿主 manifest 原地升級尚未由此套件交付。需要宿主擴充時先交付相容層並驗證，不把登記當作安裝完成。只有客服設定／登記改動且宿主來源未變時，不重新部署宿主。Node／SQLite 後台獨立持久運行，不能原封不動放進 Workers。
 
 9. 執行客服及宿主要求的檢查；驗證保存及同 ID 讀回、批准／撤銷、過期、人工接手、重啟、320px、真正 200% browser zoom 及卡片尺寸。真實 WhatsApp 用指定手機完成同筆來訊、核對回覆及實際收件；accepted 不當 delivered，uncertain 先核對不盲目重發。本人尚未掃碼或送出原生交接時，標為 waiting_user。
 
 10. 按用戶當次授權更新真正受影響的來源及原 Site，核對各自 commit、版本、儲存及存取權限；沒有修改宿主就明說。私人部署身份、商戶資料、憑證、登入狀態、日誌及備份留在 Git 之外。新增收費資源先由用戶決定。
+
+11. 新問題對照 feedback/registry.json，分類為來源缺陷、客戶端／宿主相容、設定／授權、私人維護或未支援能力。通用修正、合成案例及文件回到唯一維護來源；私人觀察、截圖及實測收據留在 Git 以外，以 case ID 綁定。收據有時間、能力範圍及來源／設定綁定，新觀察明確取代同範圍舊觀察，不能將舊階段摘要當目前狀態。工程回饋沿用共用 harness；日常知識與對話保存不要求 Git commit 或完整發佈。
 
 完成後交付：實際來源、卡片與 API 範圍、宿主內容未被客服替換的核對結果、運行服務、持久資料、真實 WhatsApp 階段及缺項。只問未取得而必要的資料；先把可獨立完成的已授權工作做好，不以「已連接」概括未驗證能力。

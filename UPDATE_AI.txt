@@ -1,0 +1,30 @@
+請更新我已選定的 BlueSAi-Cs-0001 客服實例，保留原工作室入口、登入、Agent ID、私人資料、知識與對話，並用繁體中文逐步完成。
+來源：https://github.com/collieai-g/BlueSAi-Cs-0001
+
+本入口只處理同一實例升級。若我要求全新安裝並保留舊站，改按 INSTALL_AI.txt 使用獨立服務及空白私人資料位置，不把新安裝改為舊站更新。
+
+先讀 AGENTS.md、docs/FEEDBACK_LOOP.md、feedback/registry.json、docs/INSTALL_PACKAGE.md、docs/INSTALL.md、docs/AGENT_UI_CONTRACT.md 及 docs/CONNECTION_GUIDE.md。先核對實際工具、已驗證宿主身份及既有操作紀錄；私人設定與進度均在公開倉庫以外。
+
+1. 讀回真正已安裝的客服 commit、元件／宿主適配版本、產物雜湊、Agent ID、runtime 與私人資料綁定。核實目標版本的發佈狀態並固定完整 commit，不直接從浮動 main 更新。不要由資料夾名稱、舊截圖、PR 合併或設定檔推斷運行版本。
+
+2. 比較唯一維護來源、已安裝固定版本及本機候選，將每項差異關聯既有 case ID。相同根因追加觀察，不另建一份修正；私人緊急補丁先回到所屬來源並補回歸。node tools/feedback-audit.js 只檢查案例映射及未分類差異，不證明測試通過或實例已部署。宿主或登入接駁問題回到相應項目，BlueSAI 保留跨項目依賴。
+
+3. 先完成可審閱的更新計劃：列明固定來源與產物、受影響服務、schema／相容要求、保留狀態、備份 coverage、復原路徑及驗收。新的目標來源／計劃使用新的 operation_id，重試同一計劃接續原工作。來源、發佈、部署各自標示；沒有授權的公開發佈或其他實例更新不順帶執行。
+
+4. 沿用 src/install.js 的 preflight、InstallJournal、validateBackupCoverage。相同 operation／plan 先 get 讀回，以最新 expected_version 接續；不另造安裝狀態機或備份引擎。需要本人操作時記錄 waiting_user 與 resume_phase，只給目前一步的入口、動作及成功標誌。
+
+5. 變更既有資料前核對各資料域的 schema、checkpoint、coverage、可讀私人副本及隔離還原。已有完全覆蓋本次變更前狀態的有效收據便重用，不重複導出／下載；資料有新增便重新判斷範圍，不能宣稱舊備份包含後來的對話、知識或登入。宿主儲存、外部核心 SQLite 及橋接資料分開核對，schema 以應用 migration 契約為準。只停止本次擁有的服務，保留不明結果先查證。
+
+6. 固定並驗證通過 npm test、npm run check 及相應案例檢查的產物；按 npm run package:release 契約核對 commit、inventory 與 tar 雜湊。乾淨來源與打包成功不代替測試。只更新所需 runtime／元件，保留原私人目錄、有效手機登入、未完成工作、批准／撤銷、人工狀態及原商戶空白欄位；不將私人資料回寫來源，不因升級重掃 QR 或重建空白資料庫。
+
+7. 原生介面遵循唯一生成來源。改 design/customer-agent-card-design.html 後由 tools/build-workbench.py 產出元件；宿主按 integrations/blueprint/card-ui.json 掛載固定版本。宿主只維護適配層、身份及外層導航，不另改一份生成的客服業務程式。沒有宿主變更就不重部署整個宿主。
+
+8. 登記／設定沿用 src/install-blueprint.js 的 ensure 與同 ID CAS 讀回。現有公開宿主合約未提供 manifest 原地升級接口；若回報 HOST_PACKAGE_UPGRADE_REQUIRED，先完成並驗證相容宿主正式升級能力，保留現有可用實例並列為受阻。不可新增第二張 Agent 卡片、覆蓋宿主業務表、搬入整頁或 iframe 規避。登記成功不代表後台、元件或渠道已更新。
+
+9. 正常啟動後讀回同一資料及原帳戶。重啟可能令程序內發送 grant 及模型驗證失效；核對實際狀態後，依本人既有授權恢復同一範圍，不偷偷擴大或盲信持久旗標。本人選 all_private_text 時不退回逐號 allowlist；原選 test 模式亦不擴大收件。模型合成推理、FAQ 直答、人工發送及真正 AI 不同問法各自核對，送達用同筆手機／渠道回執證明。
+
+10. 更新政策、知識或對話控制後，舊版草稿重新閱讀及核對；不重送 uncertain 訊息或重跑舊來訊作驗收。人工接手保持人工，依本人授權才交回知識庫／AI。新知識需已批准且有效，儲存本身不會主動向客戶發訊。工作區更新保留未保存輸入；320px 與真正 200% browser zoom 依變更範圍驗收。
+
+11. 每項結果保存為私人、不可變、有時間／能力範圍／來源與設定綁定的收據；新觀察明確取代同範圍舊觀察。由有效收據產生目前摘要，不另外手寫多份互相矛盾的完成狀態。舊失敗、備份及版本檢查保留原意；其他來源版本／其他實例的結果不能直接沿用。
+
+12. 交付受影響案例的結果、固定來源與產物、資料保留與同 ID 讀回、真正部署及渠道驗收、尚未支援／待驗項目。只有本次計劃要求均有相符證據，才將該實例的這次升級標為 complete。只完成本機候選、上游交接或檢查時，明確停在該狀態，不聲稱所有工作室已同步。
