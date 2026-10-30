@@ -4,5 +4,10 @@
 .bluesai-native-card #cs-card-design .bp-card-surface{max-width:none}
 .bluesai-native-card #cs-card-design .bp-agent-card{max-width:none;width:100%}
 .page-layout-content>.bluesai-native-card{width:100%;max-width:none}
-.bluesai-native-card #cs-card-design .bp-config-content{max-height:min(850px,calc(100vh - 170px));min-height:240px}
-@media(max-width:600px){.bluesai-native-card{width:100%}.bluesai-native-card #cs-card-design .bp-config-content{max-height:none;min-height:0;overflow:visible}}
+.agent-renderer-target>.bluesai-native-card{width:100%;max-width:none}
+.bluesai-native-card #cs-card-design .bp-config-content{max-height:none;min-height:0}
+@media(max-width:600px){.bluesai-native-card{width:100%}}
+
+.bluesai-native-card[data-bluesai-mode="expanded"] #cs-card-design [data-card-context]{display:none}
+.bluesai-native-card[data-bluesai-mode="expanded"] #cs-card-design .bp-card-surface{max-width:none;min-width:576px;padding:0}
+.bluesai-native-card[data-bluesai-mode="expanded"] #cs-card-design [data-screen="config"]{max-width:1152px}

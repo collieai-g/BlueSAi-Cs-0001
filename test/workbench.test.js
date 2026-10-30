@@ -12,11 +12,11 @@ import { createApp } from '../src/server.js';
 
 function fixture(t,options={}){
   const store=new Store(options.path||':memory:'),engine=new Engine(store,createAgent(),createEvolution());
-  const connections=createConnections({engine,store,fetchImpl:options.fetchImpl});
+  const connections=createConnections({engine,store,fetchImpl:options.fetchImpl,localWhatsAppPreview:options.localWhatsAppPreview});
   t.after(()=>store.close());return {store,engine,connections};
 }
-async function httpFixture(t){
-  const f=fixture(t),server=createApp({...f,adminToken:'test-admin-'.repeat(4),workbench:f.connections});
+async function httpFixture(t,options={}){
+  const f=fixture(t,options),server=createApp({...f,adminToken:'test-admin-'.repeat(4),workbench:f.connections});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
   const base='http://127.0.0.1:'+server.address().port;

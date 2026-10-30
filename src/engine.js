@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { validateReply } from './agent.js';
 
 export class ServiceError extends Error {
@@ -11,13 +11,18 @@ export const normalizeFaqQuestion = text => typeof text === 'string'
   ? text.normalize('NFKC').trim().replace(/\s+/gu, ' ').replace(/[?？!！。]+$/gu, '').trim().toLowerCase() : '';
 
 export class Engine {
-  constructor(store, agent, evolution, { now = Date.now, responseTimeoutMs = 30000, deadlinePollMs = 250 } = {}) {
+  constructor(store, agent, evolution, { now = Date.now, responseTimeoutMs = 30000, deadlinePollMs = 250, localInbox = false } = {}) {
     if (typeof now !== 'function' || !Number.isSafeInteger(responseTimeoutMs) || responseTimeoutMs < 1 || responseTimeoutMs > 86400000 ||
         !Number.isSafeInteger(deadlinePollMs) || deadlinePollMs < 1 || deadlinePollMs > 60000) throw new Error('INVALID_DEADLINE_OPTIONS');
     this.store = store; this.agent = agent; this.evolution = evolution;
     this.now = now; this.responseTimeoutMs = responseTimeoutMs; this.deadlinePollMs = deadlinePollMs;
     this.running = false; this.dispatching = false; this.stopping = false; this.webChatEnabled = false;
     this.generation = null;
+    this.updatePaused = false;
+    this.runtimeVersion = null;
+    // The local worker follows the saved reply policy for new arrivals only.
+    // Process-local work IDs prevent reconnects from replaying old jobs or sends.
+    this.localInboxScope=localInbox?{receive:false,manual:false,jobs:new Set(),sends:new Set()}:null;
     this.selfReply = { available:false,enabled:false,automaticFaq:false,grantId:null,requiresNewMessage:true };
     this.selfReplySender = null;
     this.watchStore();
@@ -29,6 +34,35 @@ export class Engine {
     const c = this.store.conversation(id);
     if (!c) throw new ServiceError('找不到對話。', 404);
     return c;
+  }
+  pauseForUpdate() { this.updatePaused = true; }
+  resumeAfterUpdate() { this.updatePaused = false; }
+  updateBusy() { return Boolean(this.running || this.dispatching || this.generation); }
+  setRuntimeVersion(context) {
+    this.runtimeVersion = {...context};
+    // This versioned audit extension is additive to service schema 7. Earlier
+    // services ignore it; it does not alter messages, jobs or business grants.
+    this.store.db.exec(`CREATE TABLE IF NOT EXISTS managed_job_versions (
+      job_id TEXT PRIMARY KEY, version INTEGER NOT NULL, snapshot_json TEXT NOT NULL,
+      result_message_id TEXT, created_at INTEGER NOT NULL)`);
+  }
+  bindRuntimeJob(jobId) {
+    if(!this.runtimeVersion)return true;
+    const old=this.store.get('SELECT snapshot_json FROM managed_job_versions WHERE job_id=?',jobId);
+    const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const snapshot={runtime:this.runtimeVersion,prompt:{source_release_id:this.runtimeVersion.release_id,kind:'runtime_bundled'},knowledge_revision:this.store.value('revision'),
+      knowledge:this.store.facts().map(f=>({id:f.id,sha256:digest([f.category,f.content,f.approved,f.expires_at])})).sort((a,b)=>a.id.localeCompare(b.id)),
+      policy_sha256:digest(this.inboxPolicy()),model:{provider:this.agent.provider||'none',model:this.agent.model||null}};
+    // A recovered or invalidated attempt cannot silently use a new known model,
+    // rule set or knowledge snapshot even when its executable release is equal.
+    if(old)return old.snapshot_json===JSON.stringify(snapshot);
+    this.store.run('INSERT INTO managed_job_versions VALUES (?,?,?,?,?)',jobId,1,JSON.stringify(snapshot),null,Date.now());
+    return true;
+  }
+  setLocalInboxScope({receive=false,manual=false}={}) {
+    if(!this.localInboxScope)throw new ServiceError('此服務沒有受限本機收件能力。',409);
+    this.cancelGeneration('local_inbox_scope_changed');
+    this.localInboxScope={receive:receive===true,manual:receive===true&&manual===true,jobs:new Set(),sends:new Set()};
   }
   setSelfTestReplyScope(scope,send) {
     if(!scope||typeof scope.enabled!=='boolean'||typeof scope.automaticFaq!=='boolean'||
@@ -230,11 +264,12 @@ export class Engine {
       if (window) this.handoffWindow(window, reason);
       return;
     }
-    const automatic = this.inboxPolicy().automaticKnowledge &&
+    const automatic = this.currentLocalInput(c,message.id) && this.inboxPolicy().automaticKnowledge &&
       (c.channel === 'demo' || (c.channel === 'web' ? this.webChatEnabled : this.liveReady()));
-    this.store.addMessage(c.id, 'assistant', matches[0].content, {
+    const replyId=this.store.addMessage(c.id, 'assistant', matches[0].content, {
       status: automatic ? 'queued' : 'draft', sources: [matches[0].id], decision: 'answer', engine: 'knowledge',
     });
+    if(automatic&&c.channel==='evolution'&&this.localInboxScope)this.localInboxScope.sends.add(replyId);
     this.store.audit(automatic ? 'knowledge_reply_queued' : 'knowledge_reply_drafted', c.id);
   }
   invalidate(id) {
@@ -283,6 +318,7 @@ export class Engine {
   }
   takeover(id, state = 'human') {
     const conversation = this.requireConversation(id);
+    if(this.localInboxScope&&conversation.channel==='evolution'&&state==='ai'&&!this.localInboxScope.receive)throw new ServiceError('請先核對 WhatsApp 新私人文字收件。',409);
     if (conversation.channel === 'whatsapp_self_test') {
       if(!this.selfTestReplyStatus(conversation).eligible)throw new ServiceError('請先開啟本人對話回覆測試，並從手機傳一則新文字。',409);
       return this.store.transaction(()=>{this.invalidate(id);this.store.run('UPDATE conversations SET state=? WHERE id=?',state==='ai'?'self_auto':'self_human',id);this.store.audit('self_test_control_changed',id);});
@@ -297,7 +333,9 @@ export class Engine {
     });
   }
   receive({ channel = 'demo', address = randomUUID(), name = '試聊客人', eventId = randomUUID(), text, timestamp = Date.now(), review = false }) {
+    if(this.updatePaused)throw new ServiceError('客服正在更新，請稍後重試。',503);
     if (channel === 'whatsapp_self_test') throw new ServiceError('自傳測試須使用獨立的只讀收件路線。',409);
+    if(channel==='evolution'&&this.localInboxScope&&!this.localInboxScope.receive)throw new ServiceError('本機新私人文字收件尚未獲授權。',403);
     this.checkDeadlines();
     return this.store.transaction(() => {
       const receivedAt = this.now();
@@ -315,6 +353,7 @@ export class Engine {
       const id = this.store.addMessage(c.id, 'user', text, { providerId: ['evolution','web'].includes(channel) ? eventId : null, providerInstance: channel === 'evolution' ? this.evolution.instance : null });
       if (channel === 'evolution' && this.evolution.instance) this.store.run(`INSERT INTO channel_activity(instance,last_incoming_at) VALUES (?,?)
         ON CONFLICT(instance) DO UPDATE SET last_incoming_at=excluded.last_incoming_at`, this.evolution.instance, receivedAt);
+      if(channel==='evolution'&&this.localInboxScope)this.localInboxScope.jobs.add(id);
       if (this.inboxPolicy().enabled) {
         const current = this.store.conversation(c.id);
         const reason = review ? 'incoming_needs_review' : /真人|人工|投訴|human|complaint/iu.test(text) ? 'customer_requests_human' : '';
@@ -411,8 +450,19 @@ export class Engine {
     if (next !== m.status) this.store.run('UPDATE messages SET status=? WHERE id=?', next, m.id);
   }
   async processJob(job) {
+    if(this.updatePaused)return;
+    if(!this.bindRuntimeJob(job.id)){
+      this.store.transaction(()=>{
+        const window=this.pendingWindow(job.conversation_id);
+        if(window)this.handoffWindow(window,'runtime_version_changed');
+        this.store.run("UPDATE jobs SET state='done' WHERE id=?",job.id);
+        this.store.audit('managed_job_requires_review',job.id);
+      });
+      return;
+    }
     this.checkDeadlines();
     const c = this.store.conversation(job.conversation_id);
+    if(c?.channel==='evolution'&&this.localInboxScope&&(!this.localInboxScope.receive||!this.localInboxScope.jobs.has(job.id)))return;
     if (!c || c.channel === 'whatsapp_self_test' || c.state !== 'ai' || c.version !== job.version) {
       this.store.run("UPDATE jobs SET state='done' WHERE id=?", job.id); return;
     }
@@ -462,17 +512,19 @@ export class Engine {
           if(refundSource)result={text:'這項退換安排需要由本人核對。',decision:'handoff',sourceIds:[],engine:result.engine};
           const settings = this.store.value('settings');
           const automatic = policy.enabled ? this.inboxPolicy().automaticAi : settings.mode === 'auto';
-          const canAuto = automatic && result.decision === 'answer' && result.sourceIds.length>0 &&
+          const canAuto = this.currentLocalInput(c,job.id) && automatic && result.decision === 'answer' && result.sourceIds.length>0 &&
             (c.channel === 'demo' || (agent.configured && (c.channel === 'web' ? this.webChatEnabled : this.liveReady())));
           if (result.decision === 'handoff') {
             const window = this.pendingWindow(c.id);
             if (window) this.handoffWindow(window, refundSource ? 'knowledge_requires_human' : 'agent_requests_human');
             else this.store.run("UPDATE conversations SET state='waiting' WHERE id=?", c.id);
           }
-          this.store.addMessage(c.id, 'assistant', result.text, {
+          const replyId=this.store.addMessage(c.id, 'assistant', result.text, {
             status: result.decision === 'handoff' ? 'draft' : canAuto ? 'queued' : 'draft',
             sources: [...new Set([...result.sourceIds,...(result.procedureIds||[])])], decision: result.decision, engine: result.engine,
           });
+          if(this.runtimeVersion)this.store.run('UPDATE managed_job_versions SET result_message_id=? WHERE job_id=?',replyId,job.id);
+          if(canAuto&&c.channel==='evolution'&&this.localInboxScope)this.localInboxScope.sends.add(replyId);
           if (result.decision === 'handoff') this.store.audit(refundSource ? 'knowledge_requires_human' : 'agent_requests_human', c.id);
         }
         // A knowledge edit during generation should regenerate, not silently lose
@@ -505,8 +557,12 @@ export class Engine {
       if(this.generation===active)this.generation=null;
     }
   }
+  currentLocalInput(c,messageId) {
+    return !this.localInboxScope||c.channel!=='evolution'||Boolean(this.localInboxScope.receive&&this.localInboxScope.jobs.has(messageId));
+  }
   channelReady() { return Boolean(this.evolution.configured && this.evolution.deliveryEnabled); }
   liveReady() {
+    if(this.localInboxScope)return Boolean(this.localInboxScope.receive&&this.localInboxScope.manual&&this.channelReady());
     // A model-free inbox needs the explicitly enabled channel, not invented
     // merchant profile fields or a contact used only by the legacy AI workflow.
     if (this.inboxPolicy().enabled) return this.channelReady();
@@ -522,6 +578,7 @@ export class Engine {
     if (m.version !== c.version || m.config_version !== this.store.value('revision')) throw new ServiceError('資料已更新，這份草稿不能再發送。', 409);
     if (c.state !== 'ai') throw new ServiceError('請在人工回覆欄確認內容並發送。', 409);
     if (c.channel === 'evolution' && !this.liveReady()) throw new ServiceError('尚未完成真實發送設定。', 409);
+    if(c.channel==='evolution'&&this.localInboxScope)this.localInboxScope.sends.add(m.id);
     this.store.run("UPDATE messages SET content=?, status='queued' WHERE id=?", text || m.content, m.id);
     this.store.audit('approve_draft', m.id);
   }
@@ -532,6 +589,7 @@ export class Engine {
     if (c.channel === 'evolution' && !this.liveReady()) throw new ServiceError('尚未完成真實發送設定。', 409);
     return this.store.transaction(()=>{
       const messageId = this.store.addMessage(id, 'staff', text, { status: 'queued' });
+      if(c.channel==='evolution'&&this.localInboxScope)this.localInboxScope.sends.add(messageId);
       this.store.run("UPDATE handoff_tasks SET status='handled' WHERE conversation_id=? AND status='pending'", id);
       this.store.audit('manual_reply_queued', id);
       return messageId;
@@ -543,6 +601,7 @@ export class Engine {
     m = this.store.get('SELECT * FROM messages WHERE id=?', m.id);
     if (!m || m.status !== 'queued') return;
     const c = this.store.conversation(m.conversation_id);
+    if(c?.channel==='evolution'&&this.localInboxScope&&(!this.localInboxScope.receive||!this.localInboxScope.manual||!this.localInboxScope.sends.has(m.id)))return;
     if (c?.channel === 'whatsapp_self_test') {
       return this.dispatchSelfTest(m,c);
     }
@@ -610,14 +669,17 @@ export class Engine {
     });
   }
   async dispatchQueued() {
-    if (this.dispatching || this.stopping) return;
+    if (this.dispatching || this.stopping || this.updatePaused) return;
     this.dispatching = true;
     try {
-      const message = this.store.get("SELECT * FROM messages WHERE status='queued' ORDER BY created_at LIMIT 1");
+      const message = this.localInboxScope
+        ? this.store.all("SELECT * FROM messages WHERE status='queued' ORDER BY created_at").find(m=>this.localInboxScope.receive&&this.localInboxScope.manual&&this.localInboxScope.sends.has(m.id))
+        : this.store.get("SELECT * FROM messages WHERE status='queued' ORDER BY created_at LIMIT 1");
       if (message) await this.dispatch(message);
     } finally { this.dispatching = false; }
   }
   async tick() {
+    if(this.updatePaused)return;
     if (!this.stopping) this.checkDeadlines();
     if (this.stopping) return;
     // A slow generation must not block the independent manual-send lane after
@@ -625,7 +687,9 @@ export class Engine {
     if (this.running) { await this.dispatchQueued(); return; }
     this.running = true;
     try {
-      const job = this.store.get("SELECT * FROM jobs WHERE state='pending' ORDER BY created_at LIMIT 1");
+      const job = this.localInboxScope
+        ? this.store.all("SELECT * FROM jobs WHERE state='pending' ORDER BY created_at").find(job=>this.localInboxScope.receive&&this.localInboxScope.jobs.has(job.id))
+        : this.store.get("SELECT * FROM jobs WHERE state='pending' ORDER BY created_at LIMIT 1");
       if (job) await this.processJob(job);
       await this.dispatchQueued();
     } finally { this.running = false; }

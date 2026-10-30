@@ -3,7 +3,7 @@
 
 先沿用我已選定的目標及本機／雲端路線。更新同一客服實例時轉讀 UPDATE_AI.txt；若我明確要求全新安裝並保留舊站，使用獨立服務及空白私人資料位置，舊站不動，不因找到舊站而改做更新，亦不以舊站備份作為新安裝前置條件。
 
-先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md、docs/CODEX_DOT_HANDOFF.md、docs/CONNECTION_GUIDE.md 及 docs/FEEDBACK_LOOP.md。核實真正發佈狀態；0.4.0-preview.1 是預覽。固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。先核對 AI 平台真正載入的工具，不由文件推斷能力；需要本人操作時，只給目前一步的入口、動作及成功標誌。
+先讀 AGENTS.md、docs/AGENT_UI_CONTRACT.md、README.md、docs/INSTALL.md、docs/INSTALL_PACKAGE.md、docs/ARCHITECTURE.md、docs/BLUEPRINT_PLUGIN_DESIGN.md、docs/CODEX_DOT_HANDOFF.md、docs/CONNECTION_GUIDE.md 及 docs/FEEDBACK_LOOP.md。核實真正發佈狀態；0.4.0-preview.2 是預覽。固定完整來源 commit 及產物雜湊，不把 main、歷史私人適配或舊驗證說成目前正式版。先核對 AI 平台真正載入的工具，不由文件推斷能力；需要本人操作時，只給目前一步的入口、動作及成功標誌。
 
 1. 客服只能是一個已登記 Agent 項目。精簡入口展開為同一實例的收件匣／知識庫／管理工作區，對話優先，設定及渠道教學放在管理；不是再建立另一套客服工作室。只掛載客服根節點及 /api/agents/bluesai-cs-0001；外層導覽、身份及排版由宿主管理。
 

@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createLocalBridge, validateDataDirectory, validateNumbers, resolvePhoneAddress, resolveLinkedPhone } from './bridge.js';
 import { normalizeEvent, createEvolution } from '../../src/evolution.js';
+import { Store } from '../../src/store.js';
+import { Engine } from '../../src/engine.js';
+import { createApp } from '../../src/server.js';
 
 const key='synthetic-test-service-key-'.repeat(3),secret='synthetic-test-callback-secret-'.repeat(3),instance='test-local';
 const number='85255550123',address=number+'@s.whatsapp.net';
@@ -20,7 +24,7 @@ async function fixture(t, options={}) {
   const mappingRequests=[];
   const loadAuth=async()=>({state:{creds:{registered:false,me:{id:linkedAddress}},keys:{}},saveCreds:async()=>{}});
   const bridge=createLocalBridge({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,allowTestActivation:true,flushIntervalMs:60000,
-    makeSocket:config=>{socket={ev:new EventEmitter(),ws:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);socket.providerConfig=config;return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
+    makeSocket:config=>{socket={ev:new EventEmitter(),ws:new EventEmitter(),user:config.auth.creds.me,signalRepository:{lidMapping:{getLIDForPN:async pn=>{mappingRequests.push(pn);return '123456789@lid';},getPNForLID:async lid=>lid==='123456789@lid'?number+':0@s.whatsapp.net':null}},sendMessage:async(jid,content,opts)=>{calls.push({jid,content,opts});return {key:{id:options.aliasProviderId||opts.messageId}};},end:()=>{}};assert.equal(config.syncFullHistory,false);assert.equal(config.shouldSyncHistoryMessage(),false);assert.equal(config.shouldIgnoreJid(number+':3@s.whatsapp.net'),false);assert.equal(config.shouldIgnoreJid('123456789:3@lid'),false);assert.equal(config.shouldIgnoreJid('123456789@g.us'),true);socket.providerConfig=config;return socket;},loadAuth,encodeQr:async raw=>'data:image/png;base64,'+Buffer.from(raw).toString('base64'),now:()=>stamp,qrWaitMs:50,
     fetchImpl:async(url,init)=>{callbacks.push({url,init});return new Response('{}');},...options});
   await new Promise(resolve=>bridge.server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+bridge.server.address().port;
@@ -35,6 +39,89 @@ async function fixture(t, options={}) {
   const message=(id='in-1',extra={})=>({key:{id,remoteJid:address,fromMe:false},messageTimestamp:stamp/1000,message:{conversation:'［合成測試］你好'},...extra});
   return {bridge,base,api,connect,register,allow,message,dir,calls,callbacks,mappingRequests,get socket(){return socket;},advance:ms=>{stamp+=ms;}};
 }
+
+test('preview restart preserves a queued inbound until the same linked account resumes, without automatic sending',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'bluesai-preview-pending-'));
+  const holders=[];t.after(async()=>{for(const f of holders)await f.bridge.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+  let forwarded=0;
+  const old=await fixture(t,{dir,keep:true,fetchImpl:async()=>new Response('{}',{status:503})});
+  holders.push(old);
+  await old.connect();await old.register();
+  assert.equal((await old.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true,replyToReceived:false})).status,200);
+  old.socket.ev.emit('messages.upsert',{type:'notify',messages:[old.message('synthetic-pending')]});await new Promise(resolve=>setImmediate(resolve));
+  await old.bridge.flush();assert.equal(old.bridge.status().webhook.pending,1);await old.bridge.close();
+  const baseline=new DatabaseSync(join(dir,'bridge.sqlite'));
+  const savedScope=baseline.prepare("SELECT value FROM bridge_config WHERE key='inbox_scope'").get().value;
+  const malformed=JSON.stringify({mode:'all_private_text',account:null,consentedAt:42});
+  baseline.prepare("UPDATE bridge_config SET value=? WHERE key='inbox_scope'").run(malformed);
+  baseline.close();
+  const broken=await fixture(t,{dir,keep:true,requireInboxReconsent:true,preservePreviewInbox:true,allowTestActivation:false,fetchImpl:async()=>{forwarded++;return new Response('{}');}});
+  holders.push(broken);await broken.connect();await broken.register();
+  assert.equal((await broken.api(`/instance/previewInbox/${instance}`,'PUT',{enable:true})).status,409);
+  broken.advance(3000);await broken.bridge.flush();assert.equal(broken.bridge.status().webhook.pending,1);assert.equal(forwarded,0);await broken.bridge.close();
+  const repair=new DatabaseSync(join(dir,'bridge.sqlite'));
+  assert.equal(repair.prepare("SELECT value FROM bridge_config WHERE key='inbox_scope'").get().value,malformed);
+  repair.prepare("UPDATE bridge_config SET value=? WHERE key='inbox_scope'").run(savedScope);
+  repair.prepare('INSERT INTO callback_outbox VALUES (?,?,?,?,?,?)').run('synthetic-broken','synthetic-broken','{bad json',0,0,0);
+  for(const [id,payload] of [['synthetic-null','null'],['synthetic-array','[]'],['synthetic-string','"unexpected"']])repair.prepare('INSERT INTO callback_outbox VALUES (?,?,?,?,?,?)').run(id,id,payload,0,0,0);
+  const oldUnbound=JSON.stringify({instance,event:'messages.upsert',data:old.message('synthetic-unbound')});
+  repair.prepare('INSERT INTO callback_outbox VALUES (?,?,?,?,?,?)').run('synthetic-unbound','synthetic-unbound',oldUnbound,0,0,0);
+  repair.close();
+  const mismatch=await fixture(t,{dir,keep:true,requireInboxReconsent:true,preservePreviewInbox:true,allowTestActivation:false,
+    loadAuth:async()=>({state:{creds:{registered:true,me:{id:'85255559999:3@s.whatsapp.net'}},keys:{}},saveCreds:async()=>{}}),fetchImpl:async()=>{forwarded++;return new Response('{}');}});
+  holders.push(mismatch);
+  await mismatch.connect();await mismatch.register();
+  assert.equal((await mismatch.api(`/instance/previewInbox/${instance}`,'PUT',{enable:true})).status,409);
+  mismatch.advance(3000);await mismatch.bridge.flush();assert.equal(mismatch.bridge.status().webhook.pending,6);assert.equal(forwarded,0);await mismatch.bridge.close();
+  const store=new Store(':memory:');let modelCalls=0,resumed;
+  const engine=new Engine(store,{configured:true,provider:'synthetic',reply:async()=>{modelCalls++;throw Error('model must not run');}},createEvolution({url:'http://127.0.0.1:3199',instance,apiKey:key,deliveryEnabled:true,fetchImpl:(url,init)=>fetch(resumed.base+new URL(url).pathname,init)}),{localInbox:true});
+  engine.setLocalInboxScope({receive:true,manual:true});
+  const core=createApp({store,engine,adminToken:'synthetic-core-admin-'.repeat(3),webhookSecret:secret,workbench:{verifyWhatsAppIngress:async()=>{}},activationAt:Date.now()+10000});
+  await new Promise(resolve=>core.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>core.close(resolve));await engine.stop();store.close();});
+  const coreUrl='http://127.0.0.1:'+core.address().port+'/webhooks/evolution';
+  let coreReady=false;
+  resumed=await fixture(t,{dir,keep:true,requireInboxReconsent:true,preservePreviewInbox:true,allowTestActivation:false,aliasProviderId:'synthetic-provider-alias',fetchImpl:async(_url,init)=>{forwarded++;return coreReady?fetch(coreUrl,init):new Response('{}',{status:403});}});
+  holders.push(resumed);
+  await resumed.connect();await resumed.register();
+  assert.equal((await resumed.api(`/instance/previewInbox/${instance}`,'PUT',{enable:true})).status,200);
+  resumed.advance(3000);await resumed.bridge.flush();assert.equal(resumed.bridge.status().webhook.pending,6);assert.equal(forwarded,1);assert.equal(store.conversations().length,0);
+  coreReady=true;resumed.advance(3000);await resumed.bridge.flush();await resumed.bridge.flush();
+  assert.equal(resumed.bridge.status().webhook.pending,5);assert.equal(forwarded,2);assert.equal(resumed.calls.length,0);
+  assert.equal(store.conversations().length,1);assert.equal(store.messages(store.conversations()[0].id).length,1);
+  await engine.tick();assert.equal(modelCalls,0);
+  const conversation=store.conversations()[0];engine.takeover(conversation.id);const reply=engine.manualReply(conversation.id,'合成人工回覆');await engine.tick();
+  assert.equal(store.get('SELECT status FROM messages WHERE id=?',reply).status,'accepted');assert.equal(resumed.calls.length,1);
+  const sentId='synthetic-provider-alias';
+  resumed.socket.ev.emit('messages.update',[{key:{id:sentId,remoteJid:'85255551111@s.whatsapp.net',fromMe:true},update:{status:3}}]);await new Promise(resolve=>setImmediate(resolve));await resumed.bridge.flush();
+  assert.equal(store.get('SELECT status FROM messages WHERE id=?',reply).status,'accepted');
+  resumed.socket.user={id:'85255559999:3@s.whatsapp.net'};
+  resumed.socket.ev.emit('messages.update',[{key:{id:sentId,remoteJid:address,fromMe:true},update:{status:3}}]);await new Promise(resolve=>setImmediate(resolve));await resumed.bridge.flush();
+  assert.equal(store.get('SELECT status FROM messages WHERE id=?',reply).status,'accepted');resumed.socket.user={id:linkedAddress};
+  for(const [providerStatus,expected] of [[3,'delivered'],[4,'read']]){
+    resumed.socket.ev.emit('messages.update',[{key:{id:sentId,remoteJid:address,fromMe:true},update:{status:providerStatus}}]);await new Promise(resolve=>setImmediate(resolve));await resumed.bridge.flush();
+    assert.equal(store.get('SELECT status FROM messages WHERE id=?',reply).status,expected);
+  }
+  assert.equal(forwarded,4);assert.equal(resumed.bridge.status().webhook.pending,5);
+  const preserved=new DatabaseSync(join(dir,'bridge.sqlite'),{readOnly:true});assert.equal(preserved.prepare("SELECT payload FROM callback_outbox WHERE id='synthetic-broken'").get().payload,'{bad json');assert.equal(preserved.prepare("SELECT payload FROM callback_outbox WHERE id='synthetic-unbound'").get().payload,oldUnbound);preserved.close();
+});
+
+test('preview never replaces a malformed or partially bound saved scope even without queued messages',async t=>{
+  const f=await fixture(t,{requireInboxReconsent:true,preservePreviewInbox:true,allowTestActivation:false});
+  await f.connect();await f.register();
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'));
+  for(const value of [{mode:'invalid',account:'85255559999',consentedAt:10},{mode:'test',account:'85255559999',consentedAt:null},{mode:'test',account:null,consentedAt:10},{mode:'all_private_text',account:null,consentedAt:10}]){
+    const encoded=JSON.stringify(value);db.prepare("INSERT INTO bridge_config VALUES ('inbox_scope',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encoded);
+    assert.equal((await f.api(`/instance/previewInbox/${instance}`,'PUT',{enable:true})).status,409);
+    assert.equal(db.prepare("SELECT value FROM bridge_config WHERE key='inbox_scope'").get().value,encoded);
+    assert.equal(f.bridge.status().webhook.pending,0);
+  }
+  const savedSelf={mode:'all_private_text',account:linkedNumber,consentedAt:10,includeSelfTests:true,selfTestConsentedAt:11};
+  db.prepare("UPDATE bridge_config SET value=? WHERE key='inbox_scope'").run(JSON.stringify(savedSelf));
+  const confirmed=await f.api(`/instance/previewInbox/${instance}`,'PUT',{enable:true});assert.equal(confirmed.status,200);assert.equal(confirmed.data.includeSelfTests,false);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM bridge_config WHERE key='inbox_scope'").get().value),savedSelf);
+  db.close();
+});
 
 test('local bridge starts idle, authenticates owner API and never invents a QR',async t=>{
   const f=await fixture(t);
@@ -52,6 +139,20 @@ test('local bridge starts idle, authenticates owner API and never invents a QR',
   f.advance(21000);
   assert.equal(f.bridge.status().qrAvailable,false);
   assert.equal(f.bridge.status().qrExpiresInMs,0);
+});
+
+test('reading the current QR never creates or reconnects a socket and never returns an expired image',async t=>{
+  const f=await fixture(t),path=`/instance/qr/${instance}`;
+  assert.equal((await f.api(path,'GET',undefined,'wrong')).status,401);
+  assert.equal((await f.api(path)).data.base64,null);assert.equal(f.socket,null);
+  const starting=f.api(`/instance/connect/${instance}`);
+  while(!f.socket)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('connection.update',{qr:'synthetic-qr-current'});await starting;
+  const current=f.socket;assert.ok((await f.api(path)).data.base64);
+  f.advance(21000);assert.equal((await f.api(path)).data.base64,null);
+  current.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  assert.equal((await f.api(path)).data.base64,null);assert.equal(f.socket,current,'a read does not create a replacement provider socket');
+  assert.equal(f.bridge.status().instance.state,'close');
 });
 
 test('bluesai-whatsapp-link-001: newest QR wins even when encoding finishes out of order',async t=>{
@@ -205,6 +306,98 @@ test('private auth cannot be created inside another Git checkout',()=>{
   try{mkdirSync(join(dir,'.git'));assert.throws(()=>validateDataDirectory(join(dir,'not-created-yet','state')),/OUTSIDE_SOURCE/);}finally{rmSync(dir,{recursive:true,force:true});}
 });
 
+function bridgeConfigSnapshot(dir){
+  const db=new DatabaseSync(join(dir,'bridge.sqlite'),{readOnly:true});
+  try{return Object.fromEntries(db.prepare('SELECT key,value FROM bridge_config ORDER BY key').all().map(row=>[row.key,JSON.parse(row.value)]));}
+  finally{db.close();}
+}
+const idleBridgeOptions=dir=>({dataDir:dir,instance,apiKey:key,webhookUrl:webhook.url,webhookSecret:secret,flushIntervalMs:60000,
+  makeSocket:()=>{throw Error('synthetic test must remain idle');},loadAuth:async()=>{throw Error('synthetic test must not read auth');},encodeQr:async()=>{throw Error('synthetic test must not encode a QR');}});
+
+test('link-only callback upgrade needs the exact explicit target and preserves auth with every permission closed',async t=>{
+  const f=await fixture(t,{webhookUrl:'',webhookSecret:'',keep:true});await f.bridge.close();
+  t.after(()=>rmSync(f.dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  mkdirSync(join(f.dir,'auth'));writeFileSync(join(f.dir,'auth','synthetic-preservation-marker'),'synthetic auth bytes');
+  const before=bridgeConfigSnapshot(f.dir),options=idleBridgeOptions(f.dir);
+  assert.throws(()=>createLocalBridge(options),/LOCAL_BRIDGE_IDENTITY_CHANGED/,'normal startup cannot migrate a callback');
+  assert.deepEqual(bridgeConfigSnapshot(f.dir),before);
+  const bridge=createLocalBridge({...options,initialCallbackUpgradeUrl:webhook.url,requireInboxReconsent:true});
+  const status=bridge.status();
+  assert.equal(status.instance.state,'close');assert.equal(status.instance.linkedPhone,null);
+  assert.equal(status.webhook.configured,true);assert.equal(status.webhook.enabled,false);
+  assert.equal(status.inboxScope.consented,false);assert.equal(status.inboxScope.replyToReceived,false);
+  assert.equal(status.testMode.count,0);assert.equal(status.testMode.deliveryEnabled,false);
+  assert.equal(readFileSync(join(f.dir,'auth','synthetic-preservation-marker'),'utf8'),'synthetic auth bytes');
+  assert.deepEqual(bridgeConfigSnapshot(f.dir).identity,{instance,callback:webhook.url});
+  await bridge.close();
+  const restart=createLocalBridge({...options,requireInboxReconsent:true});await restart.close();
+  assert.deepEqual(bridgeConfigSnapshot(f.dir).initial_callback_upgrade,{from:'',to:webhook.url});
+  for(const other of [{instance:'different-instance'},{webhookUrl:'http://127.0.0.1:3200/webhooks/evolution',initialCallbackUpgradeUrl:'http://127.0.0.1:3200/webhooks/evolution'}]){
+    assert.throws(()=>createLocalBridge({...options,initialCallbackUpgradeUrl:webhook.url,...other}),/LOCAL_BRIDGE_IDENTITY_CHANGED/);
+  }
+});
+
+test('callback upgrade rejects noncanonical, mismatched and pre-authorized targets without changing identity',async t=>{
+  const f=await fixture(t,{webhookUrl:'',webhookSecret:'',keep:true});await f.bridge.close();
+  t.after(()=>rmSync(f.dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  const before=bridgeConfigSnapshot(f.dir),options=idleBridgeOptions(f.dir);
+  for(const target of ['http://localhost:3199/webhooks/evolution','http://127.0.0.1:3200/webhooks/evolution',webhook.url+'?x=1',webhook.url+'#fragment','http://127.0.0.1:80/webhooks/evolution','http://user@127.0.0.1:3199/webhooks/evolution','https://127.0.0.1:3199/webhooks/evolution',true]){
+    assert.throws(()=>createLocalBridge({...options,initialCallbackUpgradeUrl:target}),/LOCAL_PREVIEW_CALLBACK_UPGRADE_INVALID/);
+    assert.deepEqual(bridgeConfigSnapshot(f.dir),before);
+  }
+  for(const extra of [{deliveryEnabled:true},{testRecipients:[number]}]){
+    assert.throws(()=>createLocalBridge({...options,initialCallbackUpgradeUrl:webhook.url,...extra}),/LOCAL_BRIDGE_IDENTITY_CHANGED/);
+    assert.deepEqual(bridgeConfigSnapshot(f.dir),before);
+  }
+  const db=new DatabaseSync(join(f.dir,'bridge.sqlite'));
+  db.prepare('INSERT INTO callback_outbox VALUES (?,?,?,?,?,?)').run('synthetic-pending','synthetic-key','{}',0,0,0);db.close();
+  assert.throws(()=>createLocalBridge({...options,initialCallbackUpgradeUrl:webhook.url}),/LOCAL_BRIDGE_IDENTITY_CHANGED/,'pending work cannot be redirected by this migration');
+  assert.deepEqual(bridgeConfigSnapshot(f.dir),before);
+});
+
+test('callback migration rolls back identity, marker and permissions atomically and can retry after a write failure',async t=>{
+  const f=await fixture(t,{webhookUrl:'',webhookSecret:'',keep:true});await f.bridge.close();
+  t.after(()=>rmSync(f.dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  const before=bridgeConfigSnapshot(f.dir),db=new DatabaseSync(join(f.dir,'bridge.sqlite'));
+  db.exec("CREATE TRIGGER synthetic_reject_identity BEFORE UPDATE ON bridge_config WHEN NEW.key='identity' BEGIN SELECT RAISE(ABORT,'synthetic identity failure'); END");db.close();
+  const options={...idleBridgeOptions(f.dir),initialCallbackUpgradeUrl:webhook.url,requireInboxReconsent:true};
+  assert.throws(()=>createLocalBridge(options),/synthetic identity failure/);
+  assert.deepEqual(bridgeConfigSnapshot(f.dir),before,'no half-written grant reset or upgrade marker survives');
+  const retryDb=new DatabaseSync(join(f.dir,'bridge.sqlite'));retryDb.exec('DROP TRIGGER synthetic_reject_identity');retryDb.close();
+  const retry=createLocalBridge(options);await retry.close();
+  assert.deepEqual(bridgeConfigSnapshot(f.dir).identity,{instance,callback:webhook.url});
+});
+
+test('concurrent different callback upgrades cannot overwrite the first committed identity',async t=>{
+  const f=await fixture(t,{webhookUrl:'',webhookSecret:'',keep:true});await f.bridge.close();
+  t.after(()=>rmSync(f.dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  const gate=new SharedArrayBuffer(4),state=new Int32Array(gate),workers=[];
+  const outcomes=['http://127.0.0.1:3199/webhooks/evolution','http://127.0.0.1:3200/webhooks/evolution'].map(target=>new Promise((resolveWorker,reject)=>{
+    const worker=new Worker(`const {parentPort,workerData}=require('node:worker_threads');(async()=>{const {createLocalBridge}=await import(workerData.module);parentPort.postMessage({ready:true});Atomics.wait(new Int32Array(workerData.gate),0,0);try{const bridge=createLocalBridge({...workerData.options,makeSocket:()=>{},loadAuth:async()=>{},encodeQr:async()=>{}});await bridge.close();parentPort.postMessage({ok:true,target:workerData.options.webhookUrl});}catch(error){parentPort.postMessage({ok:false,code:error.code||error.message});}})().catch(error=>{throw error;});`,{eval:true,execArgv:[],workerData:{gate,module:new URL('./bridge.js',import.meta.url).href,options:{...idleBridgeOptions(f.dir),makeSocket:undefined,loadAuth:undefined,encodeQr:undefined,webhookUrl:target,initialCallbackUpgradeUrl:target,requireInboxReconsent:true}}});
+    workers.push(worker);let ready=false;const timer=setTimeout(()=>{worker.terminate();reject(Error('synthetic worker timeout'));},10000);
+    worker.on('message',message=>{if(message.ready){ready=true;if(workers.every(item=>item.ready)){Atomics.store(state,0,1);Atomics.notify(state,0,2);}return;}clearTimeout(timer);resolveWorker(message);});
+    Object.defineProperty(worker,'ready',{get:()=>ready});worker.once('error',error=>{clearTimeout(timer);reject(error);});
+  }));
+  const results=await Promise.all(outcomes);await Promise.all(workers.map(worker=>worker.terminate()));
+  assert.equal(results.filter(result=>result.ok).length,1);
+  assert.equal(results.filter(result=>!result.ok).length,1);
+  assert.equal(bridgeConfigSnapshot(f.dir).identity.callback,results.find(result=>result.ok).target);
+});
+
+test('controlled preview restart requires new receive consent and quarantines pending records without deleting auth or queues',async t=>{
+  const first=await fixture(t,{keep:true,fetchImpl:async()=>{throw Error('synthetic unavailable callback');}});await first.connect();await first.register();
+  await first.api(`/instance/inboxScope/${instance}`,'PUT',{mode:'all_private_text',consent:true,replyToReceived:true});
+  first.socket.ev.emit('messages.upsert',{type:'notify',messages:[first.message('synthetic-restart-pending')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(first.bridge.status().webhook.pending,1);await first.bridge.close();
+  const second=await fixture(t,{dir:first.dir,requireInboxReconsent:true});
+  assert.equal(second.socket,null);assert.equal(second.bridge.status().webhook.enabled,false);
+  assert.equal(second.bridge.status().inboxScope.consented,false);assert.equal(second.bridge.status().inboxScope.replyToReceived,false);
+  assert.equal(second.bridge.status().testMode.deliveryEnabled,false);assert.equal(second.bridge.status().webhook.pending,1);
+  await second.bridge.flush();assert.equal(second.callbacks.length,0);assert.equal(second.bridge.status().webhook.pending,1);
+  await second.connect();second.socket.ev.emit('messages.upsert',{type:'notify',messages:[second.message('synthetic-no-new-consent')]});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(second.bridge.status().webhook.pending,1);assert.equal(second.callbacks.length,0);
+});
+
 test('manual test activation requires consent, open socket, matching webhook and recipient',async t=>{
   const f=await fixture(t);
   assert.equal((await f.allow()).status,409);
@@ -303,6 +496,38 @@ test('linked account identity uses explicit phone creds and never guesses from a
   assert.equal(resolveLinkedPhone({user:{id:'123456789:0@lid'}},{creds:{me:{id:linkedAddress}}}),linkedNumber);
   assert.equal(resolveLinkedPhone({user:{id:'123456789:0@lid'}},{creds:{me:{id:'123456789@lid'}}}),null);
   assert.equal(resolveLinkedPhone({user:{id:address}},{creds:{me:{id:linkedAddress}}}),null);
+});
+
+test('owner-only connection status exposes only the current open phone and never a device or LID',async t=>{
+  const f=await fixture(t),path=`/instance/connectionState/${instance}`;
+  assert.equal((await f.api(path)).data.instance.linkedPhone,null);
+  await f.connect();
+  const status=(await f.api(path)).data;
+  assert.deepEqual(status.instance,{instanceName:instance,state:'open',linkedPhone:linkedNumber});
+  assert.doesNotMatch(JSON.stringify(status),/@s\.whatsapp\.net|@lid|creds|session|advSecret/);
+  assert.equal((await f.api(path,'GET',undefined,'wrong')).status,401);
+  assert.doesNotMatch(await(await fetch(f.base+'/healthz')).text(),/linkedPhone|85255550000/);
+  f.socket.user.id='85255550001:8@s.whatsapp.net';
+  assert.equal((await f.api(path)).data.instance.linkedPhone,'85255550001');
+  f.socket.user.id='123456789:3@lid';
+  assert.equal((await f.api(path)).data.instance.linkedPhone,null);
+  f.socket.user.id=linkedAddress;f.socket.user={id:'85255550002:8@s.whatsapp.net'};
+  assert.equal((await f.api(path)).data.instance.linkedPhone,null,'conflicting phone owner identities are not guessed');
+});
+
+test('closed or replaced sockets cannot restore a stale linked phone',async t=>{
+  const f=await fixture(t);await f.connect();const previous=f.socket;
+  assert.equal(f.bridge.status().instance.linkedPhone,linkedNumber);
+  previous.ev.emit('connection.update',{connection:'close',lastDisconnect:{error:{output:{statusCode:401}}}});
+  assert.equal(f.bridge.status().instance.linkedPhone,null);
+  previous.ev.emit('connection.update',{connection:'open'});
+  assert.equal(f.bridge.status().instance.state,'close');assert.equal(f.bridge.status().instance.linkedPhone,null);
+  const reconnecting=f.api(`/instance/connect/${instance}`);
+  while(f.socket===previous)await new Promise(resolve=>setImmediate(resolve));
+  f.socket.ev.emit('connection.update',{connection:'open'});await reconnecting;
+  assert.notEqual(f.socket,previous);
+  previous.user.id='85255550003:2@s.whatsapp.net';previous.ev.emit('connection.update',{connection:'open'});
+  assert.equal(f.bridge.status().instance.linkedPhone,linkedNumber);
 });
 
 test('all-private inbox requires owner authentication, explicit consent, open phone and verified webhook',async t=>{

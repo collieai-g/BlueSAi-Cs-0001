@@ -12,7 +12,7 @@
 4. 同一命令加 `--check` 只核對差異，不覆寫檔案。宿主部署前另核對 adapter 合約、完整 commit、輸入／產出雜湊及私有 instance。
 
 產生器拒絕 Git checkout、連結／junction 及不屬於自己的非空目錄。它不安裝卡片、不重啟服務、不改資料或私有 binding。
-傳入的完整 commit 是宿主來源 pin；只有六份來源資產與該 commit 相同，`source_revision_verified` 才會是 `true`。
+傳入的完整 commit 是宿主來源 pin；所有實際讀取的來源、設計與檢查資產、三份宿主模板及兩份產生程式都與該 commit 相同，`source_revision_verified` 才會是 `true`。比對與雜湊一律使用 UTF-8／LF 正規化，`source_inputs` 列明全部輸入；只改模板或產生程式亦不可沿用舊 commit 的已核對標記。
 尚未提交的候選仍可產生供審閱的包，但會明確標為 working-tree candidate，以輸入雜湊作實際依據，不能當已發佈／已部署。
 
 | 單一來源 | 產出 | 固定轉換 |
@@ -27,3 +27,9 @@
 所有轉換先核對唯一錨點；來源結構改變時停止並要求審閱，不以猜測替換繼續。
 對話仍是同一筆記錄：`開始人工回覆` 暫停自動處理，`交回知識庫`／`交回知識庫／AI`／`交回 AI` 依已儲存政策及模型狀態顯示。
 產生器不變更這些互動或後台接手／恢復語意。
+
+## 單一卡片掛載
+
+宿主須提供 `BlueprintAgents.registerCardRenderer(id, renderer)`、`blueprint:agents-ready` 事件及 `context.cardTarget` 專用容器。renderer 在載入時或宿主就緒時登記；只有宿主明確載入的經審閱模組可執行，不從 manifest 下載腳本。宿主的靜態入口負責載入產生的 `renderer.js` 及 `agent-card.css`；產生檔案或登記 metadata 本身不會安裝入口。
+
+宿主以單一穩定外框承載客服與收合的「進階 Agent 設定與工作」，由 `renderer.layoutSpec()` 取得入口／展開尺寸。客服只把同一元件掛入 `context.cardTarget`，不在整頁尋找通用設定表單作插入位置；舊宿主缺少接口時明確報錯並保留通用設定。這避免通用工作按鈕、設定及客服內容被排版引擎拆成多張卡片。來源套件、宿主靜態入口、固定版本與真正畫面仍須分開驗證。

@@ -26,6 +26,22 @@ async function until(check,timeout=1500){const end=Date.now()+timeout;while(!che
 async function prepare(f){const source=f.exchange(),collected=f.service.collect();return {...source,caseId:collected.caseIds[0]};}
 async function analyzed(f){const c=await prepare(f);const queued=f.service.analyze(c.caseId);assert.equal(queued.status,'queued');await until(()=>f.service.status().cases.find(x=>x.id===c.caseId).status==='analyzed');return {...c,proposal:f.service.status().proposals[0]};}
 
+test('managed pause drains active learning without aborting it and holds the next queued case until resume',async t=>{
+  const releases=[];
+  const f=fixture(t,{analysisTimeoutMs:2000,model:input=>new Promise(resolve=>{
+    releases.push(()=>resolve({proposals:[proposal(input.messages)]}));
+  })});
+  const first=await prepare(f),second=await prepare(f);
+  f.service.analyze(first.caseId);f.service.analyze(second.caseId);
+  await until(()=>releases.length===1);
+  f.service.pauseForUpdate();assert.equal(f.service.updateBusy(),true);assert.equal(f.calls[0].options.signal.aborted,false);
+  releases[0]();await until(()=>!f.service.updateBusy());await delay(20);
+  assert.equal(f.calls.length,1);assert.equal(f.service.status().cases.find(x=>x.id===first.caseId).status,'analyzed');
+  f.service.resumeAfterUpdate();await until(()=>releases.length===2);
+  releases[1]();await until(()=>!f.service.updateBusy());
+  assert.equal(f.service.status().cases.find(x=>x.id===second.caseId).status,'analyzed');
+});
+
 test('collect uses only genuinely submitted human replies, preserves roles and never changes active knowledge or revision',t=>{
   const f=fixture(t),revision=f.store.value('revision');
   f.exchange();f.exchange({channel:'web',status:'read'});

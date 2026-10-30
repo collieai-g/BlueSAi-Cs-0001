@@ -23,7 +23,7 @@ export function redactLearningText(value) {
 
 export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=65000, intervalMs=1000 }) {
   if(!Number.isInteger(analysisTimeoutMs)||analysisTimeoutMs<1||analysisTimeoutMs>65000||!Number.isInteger(intervalMs)||intervalMs<10)throw Error('INVALID_LEARNING_CONFIGURATION');
-  let timer=null,started=false,stopped=false,epoch=0,active=null,scheduled=false;
+  let timer=null,started=false,stopped=false,epoch=0,active=null,scheduled=false,updatePaused=false;
   const manualQueue=new Set();
   const ready=()=>{
     const agent=engine.agent;
@@ -143,11 +143,11 @@ export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=65000
     });
   }
   function schedule() {
-    if(stopped||scheduled)return;scheduled=true;
+    if(stopped||scheduled||updatePaused)return;scheduled=true;
     queueMicrotask(()=>{scheduled=false;if(!stopped)void runNext().catch(()=>{});});
   }
   async function runNext() {
-    if(stopped||active)return;
+    if(stopped||active||updatePaused)return;
     let caseId=manualQueue.values().next().value;
     const automatic=!caseId;
     if(caseId)manualQueue.delete(caseId);
@@ -237,7 +237,7 @@ export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=65000
   }
   function start() {
     if(started)return;started=true;stopped=false;
-    const tick=()=>{if(stopped)return;try{if(active&&engine.agent!==active.agent)active.controller.abort('provider_changed');collect();schedule();}catch{}};
+    const tick=()=>{if(stopped||updatePaused)return;try{if(active&&engine.agent!==active.agent)active.controller.abort('provider_changed');collect();schedule();}catch{}};
     timer=setInterval(tick,intervalMs);timer.unref();tick();
   }
   function stop() {
@@ -248,5 +248,6 @@ export function createKnowledgeLearning({ store, engine, analysisTimeoutMs=65000
     }
   }
   store.run("UPDATE learning_cases SET status='failed',error_code='LEARNING_INTERRUPTED' WHERE status='analyzing'");
-  return {status,configure,collect,analyze,approve,reject,start,stop};
+  return {status,configure,collect,analyze,approve,reject,start,stop,
+    pauseForUpdate(){updatePaused=true;},resumeAfterUpdate(){updatePaused=false;schedule();},updateBusy:()=>Boolean(active)};
 }

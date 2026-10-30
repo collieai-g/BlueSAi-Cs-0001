@@ -33,7 +33,7 @@ async function body(req) {
 }
 function json(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
 
-export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now(), workbench = null, sessionCookieName = 'bp_session', runtimeMode = false, webChatEnabled = false }) {
+export function createApp({ store, engine, adminToken, webhookSecret = '', cookieSecure = false, activationAt = Date.now(), workbench = null, sessionCookieName = 'bp_session', runtimeMode = false, webChatEnabled = false, managedControl = null }) {
   if (adminToken.length < 32) throw new Error('ADMIN_TOKEN must contain at least 32 characters');
   if (webhookSecret && webhookSecret.length < 32) throw new Error('WEBHOOK_SECRET must contain at least 32 characters');
   const sessions = new Map(); const failures = new Map();
@@ -48,12 +48,15 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
   const runtime = () => ({ agent: engine.agent.configured ? (engine.agent.provider || 'openai') : 'offline', evolutionConfigured: engine.evolution.configured,
     deliveryEnabled: engine.evolution.deliveryEnabled, liveReady: engine.liveReady(), webhookConfigured: Boolean(webhookSecret) });
   const server = createServer(async (req, res) => {
+    let leaveManagedRequest;
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const requestedPath = new URL(req.url, 'http://localhost').pathname;
+      if(managedControl&&await managedControl.handle(req,res,requestedPath))return;
+      if(managedControl){leaveManagedRequest=managedControl.enter(req,res);if(!leaveManagedRequest)return;}
       // Only this service's card namespace is dispatched here. Host routes and
       // host storage are never mounted or replaced by this server.
       const cardBase = '/api/agents/bluesai-cs-0001';
@@ -68,6 +71,7 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
       if (await webChat(req, res, path)) return;
       if (path === '/webhooks/evolution' && method === 'POST') {
         if (!webhookSecret || !engine.evolution.instance || !equal(req.headers.authorization, `Bearer ${webhookSecret}`)) throw new ServiceError('未獲授權。', 401);
+        await workbench?.verifyWhatsAppIngress?.();
         const payload = await body(req);
         let event;
         try { event = normalizeEvent(payload, engine.evolution.instance); }
@@ -213,6 +217,13 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
         }
         if(workbench && path.startsWith('/api/workbench/connections/')){
           const action=path.split('/').at(-1);
+          if(method==='GET'&&action==='whatsapp-local')return json(res,200,await workbench.getLocalWhatsApp());
+          if(method==='POST'&&action==='whatsapp-auto-retry')return json(res,202,await workbench.retryAutoReceive());
+          if(method==='GET'&&action==='whatsapp-qr')return json(res,200,await workbench.currentWhatsAppQr());
+          if(method==='POST'&&action==='whatsapp-local'){
+            const result=await workbench.prepareLocalWhatsApp(await body(req));
+            return json(res,result.status==='preparing'?202:200,result);
+          }
           if(method==='POST'&&action==='model')return json(res,200,await workbench.model(await body(req)));
           if(method==='POST'&&action==='native-codex')return json(res,200,await workbench.nativeCodex(await body(req)));
           if(method==='DELETE'&&action==='model'){await workbench.clearAI();return json(res,200,{ok:true});}
@@ -318,10 +329,14 @@ export function createApp({ store, engine, adminToken, webhookSecret = '', cooki
     } catch (error) {
       if (!res.headersSent) json(res, error instanceof ServiceError ? error.status : 500, { error: error instanceof ServiceError ? error.message : '服務暫時未能完成，請稍後再試。' });
       else res.end();
-    }
+    } finally { if(typeof leaveManagedRequest==='function')leaveManagedRequest(); }
   });
   server.requestTimeout = 15000; server.headersTimeout = 10000;
   const closeServer=server.close.bind(server);
+  server.managedWorkBusy=()=>Boolean(knowledgeLearning?.updateBusy?.());
+  server.pauseManagedWork=()=>{knowledgeLearning?.pauseForUpdate?.();for(const close of [...eventStreams])close();};
+  server.resumeManagedWork=()=>knowledgeLearning?.resumeAfterUpdate?.();
+  managedControl?.attach(server);
   server.close=(...args)=>{knowledgeLearning?.stop();for(const close of [...eventStreams])close();return closeServer(...args);};
   if(runtimeMode&&knowledgeLearning)server.on('listening',()=>knowledgeLearning.start());
   return server;

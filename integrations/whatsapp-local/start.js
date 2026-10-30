@@ -31,6 +31,9 @@ try{
   bridge=createLocalBridge({
     dataDir:dir,apiKey,instance:process.env.WA_LOCAL_INSTANCE||'bluesai-local',
     webhookUrl:process.env.WA_LOCAL_WEBHOOK_URL||'',webhookSecret:process.env.WA_LOCAL_WEBHOOK_SECRET||'',
+    initialCallbackUpgradeUrl:process.env.WA_LOCAL_PREVIEW_CALLBACK_UPGRADE||'',
+    requireInboxReconsent:process.env.WA_LOCAL_REQUIRE_INBOX_RECONSENT==='true',
+    preservePreviewInbox:process.env.WA_LOCAL_PREVIEW_AUTO_RECEIVE==='true',
     deliveryEnabled:process.env.WA_LOCAL_DELIVERY_ENABLED==='true',allowTestActivation:process.env.WA_LOCAL_ALLOW_TEST_ACTIVATION==='true',
     testRecipients:(process.env.WA_LOCAL_TEST_RECIPIENTS||'').split(',').map(x=>x.trim()).filter(Boolean),
     loadAuth:useMultiFileAuthState,logger,normalizeJid:jidNormalizedUser,makeMessageId:()=>generateMessageIDV2(),
@@ -44,10 +47,15 @@ try{
     info('尚未連接手機；在客服卡片按「取得二維碼」後才開始真正 WhatsApp 連線。');
     info('只處理本人指定測試號碼；空白名單不轉送來訊、不發送訊息。');
     info(`私人授權資料位置：${dir}`);
+    if(process.send)process.send({type:'bluesai:bridge-ready'});
   });
   let closing=false;
   const shutdown=async()=>{if(closing)return;closing=true;await bridge.close();closeSync(lock);unlinkSync(lockPath);process.exit(0);};
   process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
+  if(process.send){
+    process.on('message',value=>{if(value?.type==='bluesai:bridge-stop')shutdown().catch(()=>{process.exitCode=1;});});
+    process.once('disconnect',()=>shutdown().catch(()=>{process.exitCode=1;}));
+  }
   bridge.server.on('error',()=>{warning('無法啟動本機 WhatsApp 接駁，請核對連接埠及私人資料鎖。');shutdown().catch(()=>{process.exitCode=1;});});
 }catch(error){
   if(lock!==undefined){closeSync(lock);unlinkSync(lockPath);}

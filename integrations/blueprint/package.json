@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "bluesai-cs-0001",
   "display_identity": "BlueSAi-Cs-#0001",
-  "version": "0.4.0-preview.1",
+  "version": "0.4.0-preview.2",
   "channel": "preview",
   "license": "MIT",
   "repository": "https://github.com/collieai-g/BlueSAi-Cs-0001",

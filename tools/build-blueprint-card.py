@@ -73,7 +73,7 @@ def component_tree(markup):
 def adapt_workbench(source):
     source = replace_once(source, '\n  (async()=>{', '\n  return await (async()=>{', 'workbench async entry')
     tweak = "    if(globalThis.Tweak){const tweak=new Tweak({container:find('.bp-agent-card'),onChange:()=>{render();remember();}});tweak.addToggle(state,'showNumber',{label:'顯示 Agent 編號'});tweak.addSlider(state,'cardPadding',{label:'卡片留白',min:18,max:30,step:2,unit:'px'});}"
-    source = replace_once(source, tweak, '    return {isBusy:()=>busy,refresh:()=>refresh(false)};', 'design-only Tweak controls')
+    source = replace_once(source, tweak, "    return {isBusy:()=>busy,refresh:()=>refresh(false),showEntry(){state.screen='list';render();remember();}};", 'design-only Tweak controls')
     return '''// Generated native-host adaptation; edit the canonical component, not this file.
 export async function initializeWorkbench(componentRoot,scope) {
   const document=scope.document,window=scope.window;
@@ -136,6 +136,18 @@ def build_assets(source_root, revision):
     sources = {name: (source_root / 'public' / name).read_text(encoding='utf-8') for name in SOURCE_ASSETS}
     templates = {name: (TEMPLATES / name).read_text(encoding='utf-8')
                  for name in ('renderer.js.tmpl', 'backend.js.tmpl', 'host-bounds.css')}
+    generators = {name: (ROOT / name).read_text(encoding='utf-8')
+                  for name in ('tools/build-blueprint-card.py', 'tools/build-workbench.py')}
+    # Include every consumed source, reviewed template and generator, not only
+    # the public component exports. A template-only host fix changes the native
+    # artifact even when those exports still match the old commit.
+    source_inputs = {'public/' + name: content for name, content in sources.items()}
+    source_inputs.update({name: (source_root / name).read_text(encoding='utf-8')
+                         for name in ('design/customer-agent-card-design.html',
+                                      'public/app.js', 'public/workbench.html', 'public/workbench.css')})
+    source_inputs.update(generators)
+    source_inputs.update({'integrations/blueprint/native/' + name: content
+                          for name, content in templates.items()})
     renderer = replace_once(templates['renderer.js.tmpl'], '@@SOURCE_REVISION@@', revision, 'renderer source pin')
     renderer = replace_once(renderer, '@@COMPONENT_TREE@@', json.dumps(component_tree(sources['agent-card.html']), ensure_ascii=False, separators=(',', ':')), 'renderer component tree')
     assets = {
@@ -147,8 +159,8 @@ def build_assets(source_root, revision):
         'workbench.js': adapt_workbench(sources['workbench.js']),
     }
     verified = True
-    for name, content in sources.items():
-        blob = subprocess.run(['git', '-C', str(source_root), 'show', revision + ':public/' + name], capture_output=True)
+    for name, content in source_inputs.items():
+        blob = subprocess.run(['git', '-C', str(source_root), 'show', revision + ':' + name], capture_output=True)
         if blob.returncode or blob.stdout.decode('utf-8').replace('\r\n', '\n') != content:
             verified = False
             break
@@ -156,14 +168,14 @@ def build_assets(source_root, revision):
         'contract_version': 1, 'generator': GENERATOR,
         'repository': 'https://github.com/collieai-g/BlueSAi-Cs-0001',
         'revision': revision, 'source_revision_verified': verified,
-        'source_status': 'commit-verified assets' if verified else 'working-tree candidate; input digests are authoritative',
+        'source_status': 'commit-verified source, templates and generators' if verified else 'working-tree candidate; input digests are authoritative',
         'deployment_status': 'not installed or deployed by this generator',
         'renderer': 'bluesai-management/1', 'api': 'bluesai-management-api/1', 'license': 'MIT',
         'normalization': 'UTF-8, LF line endings',
         'original_assets': {'public/' + name: digest(content) for name, content in sources.items()},
-        'generator_assets': {name: digest((ROOT / name).read_text(encoding='utf-8'))
-                             for name in ('tools/build-blueprint-card.py', 'tools/build-workbench.py')},
+        'generator_assets': {name: digest(content) for name, content in generators.items()},
         'template_assets': {name: digest(content) for name, content in templates.items()},
+        'source_inputs': {name: digest(content) for name, content in source_inputs.items()},
         'host_assets': {name: digest(content) for name, content in assets.items()},
         'transformations': ['build-time component tree; no runtime HTML injection',
                             'scoped module lifecycle; SSE disabled by host contract',

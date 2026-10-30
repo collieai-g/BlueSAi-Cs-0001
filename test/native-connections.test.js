@@ -9,9 +9,9 @@ import { createConnections, createRuntimeAgent } from '../src/connections.js';
 import { createApp } from '../src/server.js';
 import { createAgent } from '../src/agent.js';
 
-function fixture(t,{runtime=true,nativeAgentFactory,agent=createAgent(),fetchImpl}={}){
+function fixture(t,{runtime=true,nativeAgentFactory,allowNativePreview=false,agent=createAgent(),fetchImpl}={}){
   const store=new Store(':memory:'),engine=new Engine(store,agent,{configured:false,deliveryEnabled:false});
-  const connections=createConnections({store,engine,runtime,nativeAgentFactory,fetchImpl});
+  const connections=createConnections({store,engine,runtime,nativeAgentFactory,allowNativePreview,fetchImpl});
   t.after(async()=>{await engine.stop();store.close();});
   return {store,engine,connections};
 }
@@ -20,7 +20,7 @@ function native({check=async()=>{},health=()=>({status:'connected',checkedAt:123
     async reply(){return {text:'請問需要了解哪項服務？',decision:'clarify',sourceIds:[],engine:'codex-cli'};},close(){this.closed++;}};
 }
 
-test('native Codex requires runtime availability and explicit consent without accepting caller-controlled executable or settings',async t=>{
+test('native Codex requires explicit server availability and consent without accepting caller-controlled executable or settings',async t=>{
   let created=0;
   const factory=()=>{created++;return native();};
   const preview=fixture(t,{runtime:false,nativeAgentFactory:factory});
@@ -31,6 +31,40 @@ test('native Codex requires runtime availability and explicit consent without ac
   await assert.rejects(live.connections.nativeCodex({}),error=>error.status===400);
   await assert.rejects(live.connections.nativeCodex({consent:true,executable:'customer-controlled'}),error=>error.status===400);
   assert.equal(created,0);assert.equal(live.engine.agent.configured,false);
+});
+
+test('explicit preview inference capability waits for consent and never becomes a receive or delivery runtime',async t=>{
+  let created=0,release;
+  const candidate=native({check:()=>new Promise(resolve=>{release=resolve;})});
+  const f=fixture(t,{runtime:false,allowNativePreview:true,nativeAgentFactory:()=>{created++;return candidate;}});
+  const before=f.connections.status();
+  assert.equal(before.mode,'preview');assert.equal(before.ai.nativeAvailable,true);
+  assert.equal(created,0);assert.equal(f.engine.running,false);
+  assert.equal(before.whatsapp.receiveEnabled,false);assert.equal(before.whatsapp.deliveryEnabled,false);
+  assert.equal(before.whatsapp.webhook.configured,false);
+  await assert.rejects(f.connections.nativeCodex({consent:false}),error=>error.status===400);
+  await assert.rejects(f.connections.nativeCodex({consent:true,allowNativePreview:true}),error=>error.status===400);
+  assert.equal(created,0);
+  const activating=f.connections.nativeCodex({consent:true});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.connections.status().ai.status,'unconfigured');assert.equal(f.engine.agent.configured,false);
+  release();await activating;
+  const after=f.connections.status();
+  assert.equal(after.mode,'preview');assert.equal(after.ai.provider,'codex-cli');assert.equal(after.ai.status,'connected');
+  assert.equal(f.engine.running,false);assert.equal(after.whatsapp.receiveEnabled,false);assert.equal(after.whatsapp.deliveryEnabled,false);
+  assert.deepEqual(f.engine.inboxPolicy(),{enabled:false,automaticKnowledge:false,aiFallback:false,automaticAi:false});
+  assert.equal(f.store.value('profile').name,'');assert.equal(f.store.conversations().length,0);
+});
+
+test('preview native failure preserves an existing adapter, policy and saved conversations',async t=>{
+  const previous=native(),candidate=native({check:async()=>{throw new Error('synthetic-private-login-failure');}});
+  const f=fixture(t,{runtime:false,allowNativePreview:true,agent:previous,nativeAgentFactory:()=>candidate});
+  f.engine.configureInbox({enabled:true,automaticKnowledge:true,aiFallback:true,automaticAi:false});
+  const id=f.engine.receive({text:'合成的原有對話',review:true}).conversationId;
+  const messages=f.store.messages(id),revision=f.store.value('revision'),policy=f.engine.inboxPolicy(),wa=f.connections.status().whatsapp;
+  await assert.rejects(f.connections.nativeCodex({consent:true}),error=>error.status===502&&!error.message.includes('synthetic-private'));
+  assert.equal(f.engine.agent,previous);assert.equal(previous.closed,0);assert.equal(candidate.closed,1);
+  assert.deepEqual(f.store.messages(id),messages);assert.equal(f.store.value('revision'),revision);
+  assert.deepEqual(f.engine.inboxPolicy(),policy);assert.deepEqual(f.connections.status().whatsapp,wa);
 });
 
 test('native activation waits for the actual probe, publishes sanitized health and never enables automatic policy flags',async t=>{
@@ -122,9 +156,9 @@ test('a durable provider-switch failure cannot replace the current adapter or fa
   assert.equal(f.engine.agent,previous);assert.equal(candidate.closed,1);assert.equal(f.connections.status().ai.status,'unconfigured');
 });
 
-test('native connection route requires the card login, same-origin consent and returns the real provider identity',async t=>{
-  let created=0;const f=fixture(t,{nativeAgentFactory:()=>{created++;return native();}});
-  const server=createApp({...f,adminToken:'fixture-admin-'.repeat(4),workbench:f.connections,runtimeMode:true});
+for(const runtime of [false,true])test(`native ${runtime?'runtime':'preview'} route requires card login and same-origin consent without broadening channel mode`,async t=>{
+  let created=0;const f=fixture(t,{runtime,allowNativePreview:!runtime,nativeAgentFactory:()=>{created++;return native();}});
+  const server=createApp({...f,adminToken:'fixture-admin-'.repeat(4),workbench:f.connections,runtimeMode:runtime});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
   const base='http://127.0.0.1:'+server.address().port,path='/api/agents/bluesai-cs-0001/connections/native-codex';
@@ -137,6 +171,8 @@ test('native connection route requires the card login, same-origin consent and r
   const activated=await request(headers);assert.equal(activated.status,200);assert.equal((await activated.json()).provider,'codex-cli');
   const state=await(await fetch(base+'/api/agents/bluesai-cs-0001/state',{headers})).json();
   assert.equal(state.connections.ai.provider,'codex-cli');
+  assert.equal(state.connections.mode,runtime?'runtime':'preview');
+  assert.equal(state.connections.whatsapp.receiveEnabled,false);assert.equal(state.connections.whatsapp.deliveryEnabled,false);
   const legacy=await(await fetch(base+'/api/state',{headers})).json();assert.equal(legacy.runtime.agent,'codex-cli');
   assert.equal(created,1);assert.equal(f.engine.inboxPolicy().automaticAi,false);
 });

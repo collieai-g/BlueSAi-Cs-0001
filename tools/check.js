@@ -2,9 +2,11 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+const nonSourceDirectories = new Set(['node_modules', '.git', '__pycache__']);
 function scripts(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
-    ? scripts(join(dir, entry.name)) : entry.name.endsWith('.js') ? [join(dir, entry.name)] : []);
+    ? nonSourceDirectories.has(entry.name) ? [] : scripts(join(dir, entry.name))
+    : entry.name.endsWith('.js') ? [join(dir, entry.name)] : []);
 }
 for (const path of ['src', 'public', 'tools', 'integrations/whatsapp-local'].flatMap(scripts)) {
   const result = spawnSync(process.execPath, ['--check', path], { stdio: 'inherit' });
