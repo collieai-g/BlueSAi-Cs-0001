@@ -243,6 +243,12 @@
           "classification": "process_gap",
           "disposition": "candidate_fix",
           "summary": "同一張客服卡片沿已批准的 4:3 外框比例縮放，尺寸來源、最小／預設／最大範圍及窄畫面處理與原生宿主合約一致；保留現行配色、可閱讀文字與未儲存輸入，不使用整頁 zoom 或 transform 縮放代替排版。"
+        },
+        {
+          "id": "generated-checkout-newlines",
+          "classification": "client_compatibility_gap",
+          "disposition": "candidate_fix",
+          "summary": "Windows Git 簽出可能把來源及生成資產轉成 CRLF；生成內容驗收沿用 Python 的換行正規化，同時保留 HTML 與 CSS 完整內容相等及資產邊界斷言。"
         }
       ],
       "files": [

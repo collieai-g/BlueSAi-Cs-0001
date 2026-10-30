@@ -176,10 +176,10 @@ test('card source scopes styling, icons and API access without host navigation o
 });
 
 test('component export and asset allowlist exclude standalone login, global CSS and diagnostic shells', async () => {
-  // Match Python's universal-newline source read while retaining a full-content comparison.
+  // Match Python's universal-newline source and generated-asset reads, retaining full-content comparisons.
   const source = (await readFile(new URL('../design/customer-agent-card-design.html', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
-  const component = await readFile(new URL('../public/agent-card.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('../public/agent-card.css', import.meta.url), 'utf8');
+  const component = (await readFile(new URL('../public/agent-card.html', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const css = (await readFile(new URL('../public/agent-card.css', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
   const manifest = JSON.parse(await readFile(new URL('../integrations/blueprint/card-ui.json', import.meta.url), 'utf8'));
   assert.equal(component, source.replace(/<(?:style|script)>[\s\S]*?<\/(?:style|script)>/g, '')
     .replace(/^[ \t]+$/gm, '').replace('id="cs-card-design"', 'id="cs-card-design" hidden'));
