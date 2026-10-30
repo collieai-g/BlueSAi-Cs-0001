@@ -1,6 +1,6 @@
 # 安裝客服卡片與真實渠道
 
-版本：0.4.0-preview.1。先讀 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)、[卡片設計](BLUEPRINT_PLUGIN_DESIGN.md) 及 [架構](ARCHITECTURE.md)。
+版本：0.4.0-preview.2。先讀 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)、[卡片設計](BLUEPRINT_PLUGIN_DESIGN.md) 及 [架構](ARCHITECTURE.md)。
 
 ## 安裝成果的界線
 
@@ -50,7 +50,7 @@ npm start
 | `WEBHOOK_SECRET` | 至少 32 字元，收件端 Bearer 驗證 |
 | `PUBLIC_BASE_URL` | 客服 origin，用來生成固定 callback；同機橋接可用 loopback HTTP |
 | `DELIVERY_ENABLED` | 預設 false，普通渠道發送需明確授權後開啟 |
-| `LOCAL_WHATSAPP_TEST` | 可信本機測試橋接模式；選定測試號碼及本人確認後才啟用程序內測試發送，重啟不沿用啟用狀態 |
+| `LOCAL_WHATSAPP_TEST` | 可信本機橋接模式；收件與最近來訊回覆在卡片分別明確同意，發送授權在重啟後重新核對 |
 | `BLUESAI_CODEX_BIN` | 唯一選用的原生 CLI 設定，預設 `codex`；只由伺服器管理員指定可信執行檔，前端不能修改 |
 | `OPENAI_API_KEY`／`OPENAI_MODEL` | 選用模型 API 路線；FAQ-only、原生 ChatGPT CLI、手機連結及人工收發不需要填這些金鑰 |
 | `WEB_CHAT_ENABLED` | 可選網頁客人渠道，與 WhatsApp 驗收分開 |
@@ -79,15 +79,15 @@ Codex 官方說明指出 `exec` 可沿用已保存登入，`--ephemeral` 不保�
 
 1. 啟動此工作室自己的真實接駁服務。同一安裝升級時沿用原 Evolution instance；fresh 則先建立及核對新的獨立 instance／帳戶綁定，不接用舊私人服務；本機橋接見 [WhatsApp 路線](WHATSAPP_RUNTIME.md) 及 `integrations/whatsapp-local/README.md`。只填網址不會安裝或啟動服務。
 2. 卡片的「管理 → 接駁 WhatsApp」取得真實 QR，由本人在手機「已連結裝置」掃碼，再核對實際 open 狀態。入口的 WhatsApp 捷徑導向同一管理流程；QR 不傳入模型、日誌或公開倉庫。
-3. 在卡片私人設定選定本人同意的測試號碼。空 allowlist 的本機橋接只允許 QR／狀態，不轉送或發送其他客戶內容。核對 callback 的固定網址、認證與可達性。
-4. 保持 review，以指定另一支測試 WhatsApp 號碼來訊，在收件匣讀回同一筆訊息；先驗證收件及草稿。商戶資料只填本人已確認的內容；純知識庫／人工模式不代填未知欄位，使用模型自動處理時另核對其必要設定與發送門檻。
-5. 用戶確認測試範圍後啟用測試發送，人工核對後回覆，在收件手機實際確認。記錄 instance、訊息對應及觀察狀態；未得到回執或收件證據時不寫成已送達。
+3. 在「設定收件」明確同意接收所有新私人文字，核對 callback 的固定網址、認證與可達性；另行選擇是否允許回覆最近 24 小時內主動來訊的客戶。兩項不自動開啟，毋須登記指定測試號碼。
+4. 保持 review，由另一個本人擁有或已同意參與測試的 WhatsApp 帳戶來訊，在收件匣讀回同一筆訊息；先驗證收件及草稿。商戶資料只填本人已確認的內容；純知識庫／人工模式不代填未知欄位，使用模型自動處理時另核對其必要設定與發送門檻。
+5. 核對當次最近來訊回覆授權後，人工接手並回覆，在收件手機實際確認。記錄 instance、訊息對應及觀察狀態；未得到回執或收件證據時不寫成已送達。
 
 同機橋接透過本機 callback 及對外 WhatsApp socket 工作，不需要公開 tunnel。遠端 Evolution 不能存取你電腦的 localhost；該路線需真正可達且受保護的 HTTPS callback。只開需要的指定收發途徑，避免同一帳號多個自動 bot 重複回覆。
 
 暫時沒有另一個 WhatsApp 帳戶時，可先按 [本人對話回覆測試](SELF_REPLY_TEST.md) 核對自己的新 Hello、已批准 FAQ 自動回覆及專用人工回覆。預設仍只讀，須獨立同意當次帳戶 grant；不需模型、不改外部發送範圍，也不取代上述另一個帳戶的外部驗收。
 
-缺少服務、手機掃碼、測試號碼、收件入口或發送條件時，畫面及交付列出具體缺項及下一步。離線規則或網頁扮演客人的成功不替代實際手機測試。[使用者接駁步驟](CONNECTION_GUIDE.md)
+缺少服務、手機掃碼、收件入口或回覆同意時，在接駁流程核對具體缺項；總覽電話及連線燈只代表手機狀態。離線規則或網頁扮演客人的成功不替代實際手機測試。[使用者接駁步驟](CONNECTION_GUIDE.md)
 
 ## 安裝到真正工作室
 

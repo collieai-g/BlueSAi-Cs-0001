@@ -1,0 +1,201 @@
+/* Native Blueprint renderer for the reviewed, pinned BlueSAI component.
+ * Copyright (c) 2026 collieai-g. MIT. See PROVENANCE.json and repository LICENSE.
+ */
+import {createBackend} from './workbench-api.js';
+import {createAgentBridge} from './agent-handoff.js';
+import {initializeInboxTools} from './inbox-tools.js';
+import {initializeWorkbench} from './workbench.js';
+
+export const PACKAGE_REVISION='@@SOURCE_REVISION@@';
+const PRODUCT='bluesai-cs-0001',BASE='/api/agents/'+PRODUCT;
+const controllers=new Map(),registeredTools=new Map();
+let parking=null,connectionObserver=null;
+
+// Compiled from the reviewed, pinned component; no HTML parsing at runtime.
+const COMPONENT_TREE = @@COMPONENT_TREE@@;
+
+// COMPONENT_TREE was inserted by the build-time HTML parser. The browser never
+// fetches/parses component HTML and never injects source or script elements.
+export function buildComponent(spec,doc=globalThis.document){
+  if(typeof spec==='string')return doc.createTextNode(spec);
+  const [tag,attrs,children]=spec;
+  const element=doc.createElement(tag);
+  for(const [key,value]of Object.entries(attrs))element.setAttribute(key,value);
+  for(const child of children)element.append(buildComponent(child,doc));
+  return element;
+}
+
+export function createScope(componentRoot,getContext,username){
+  let active=true,disposed=false;
+  const timers=new Set(),timeouts=new Set(),listeners=[],toolNames=new Set(),localWindow={};
+  const actualWindow=globalThis.window,actualDocument=globalThis.document;
+  const isActive=()=>!disposed&&active&&componentRoot.isConnected&&
+    getContext()?.isCurrent()===true&&getContext()?.state.identity.username===username&&
+    ['owner','admin'].includes(getContext()?.state.identity.role);
+  const listen=(target,type,callback,options)=>{
+    target.addEventListener(type,callback,options);listeners.push([target,type,callback,options]);
+  };
+  const scopedModelContext=actualDocument.modelContext&&{
+    registerTool(definition){
+      const model=actualDocument.modelContext;
+      if(typeof model?.registerTool!=='function')return;
+      let entry=registeredTools.get(definition.name);
+      if(entry){entry.definition=definition;entry.scope=scope;toolNames.add(definition.name);return;}
+      entry={definition,scope};
+      model.registerTool({...definition,execute:async args=>{
+        if(!entry.scope?.isActive())return {isError:true,content:[{type:'text',text:'請先開啟並核對目前帳戶的客服卡片。'}]};
+        return entry.definition.execute(args);
+      }});
+      registeredTools.set(definition.name,entry);toolNames.add(definition.name);
+    },
+  };
+  const scopedDocument=new Proxy(actualDocument,{get(target,key){
+    if(key==='hidden')return !isActive()||target.hidden;
+    if(key==='visibilityState')return isActive()?target.visibilityState:'hidden';
+    if(key==='modelContext')return scopedModelContext;
+    if(key==='getElementById')return id=>id==='cs-card-design'?componentRoot:null;
+    if(key==='addEventListener')return (type,callback,options)=>listen(target,type,callback,options);
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  let scopedWindow;
+  scopedWindow=new Proxy(actualWindow,{get(target,key){
+    if(Object.hasOwn(localWindow,key))return localWindow[key];
+    if(key==='top')return target.top===target?scopedWindow:target.top;
+    if(key==='document')return scopedDocument;
+    if(key==='addEventListener')return (type,callback,options)=>listen(target,type,callback,options);
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  },set(target,key,value){localWindow[key]=value;return true;}});
+  const scope={
+    window:scopedWindow,document:scopedDocument,Notification:globalThis.Notification,isActive,
+    setInterval(callback,delay){
+      const id=globalThis.setInterval(()=>{if(isActive()&&!actualDocument.hidden)callback();},Math.max(1000,delay));
+      timers.add(id);return id;
+    },
+    clearInterval(id){globalThis.clearInterval(id);timers.delete(id);},
+    // Expiry only removes stale QR UI, even while the card is parked. Disposal
+    // cancels it so no callback can touch a former account's component.
+    setTimeout(callback,delay){
+      const id=globalThis.setTimeout(()=>{timeouts.delete(id);if(!disposed)callback();},delay);
+      timeouts.add(id);return id;
+    },
+    clearTimeout(id){globalThis.clearTimeout(id);timeouts.delete(id);},
+    pause(){active=false;},resume(){if(!disposed)active=true;},
+    dispose(){
+      if(disposed)return;disposed=true;active=false;
+      for(const id of timers)globalThis.clearInterval(id);timers.clear();
+      for(const id of timeouts)globalThis.clearTimeout(id);timeouts.clear();
+      for(const [target,type,callback,options]of listeners)target.removeEventListener(type,callback,options);
+      for(const name of toolNames){const entry=registeredTools.get(name);if(entry?.scope===scope){entry.scope=null;entry.definition=null;}}
+      localWindow.csAgentBridge=null;
+    },
+  };
+  return scope;
+}
+
+function ensureParking(){
+  if(!parking){parking=document.createElement('div');parking.hidden=true;parking.dataset.bluesaiParking='';document.body.append(parking);}
+  if(!connectionObserver){
+    connectionObserver=new MutationObserver(()=>{
+      for(const controller of controllers.values())if(!controller.wrapper.isConnected){
+        controller.scope.pause();parking.append(controller.wrapper);
+      }
+    });
+    connectionObserver.observe(document.body,{childList:true,subtree:true});
+  }
+}
+
+function discard(controller){
+  controller.scope.dispose();controller.modeObserver.disconnect();controller.wrapper.remove();controllers.delete(controller.key);
+}
+
+export function supports(agent){
+  return agent?.manifest?.id===PRODUCT&&agent.source?.revision===PACKAGE_REVISION&&
+    agent.source.repository?.replace(/\.git$/,'').replace(/\/$/,'')==='https://github.com/collieai-g/BlueSAi-Cs-0001';
+}
+
+export function layoutSpec(element){
+  if(!element?.matches?.('.bluesai-native-card')||!element.dataset.bluesaiVerified)return {};
+  return element.dataset.bluesaiMode==='expanded'
+    ?{aspectRatio:4/3,min:{w:24,h:18},max:{w:48,h:36},defaultSize:{w:36,h:27}}
+    :{min:{w:12,h:18},max:{w:24,h:24},defaultSize:{w:15,h:18}};
+}
+
+export function pause(){for(const controller of controllers.values())controller.scope.pause();}
+
+export function isBusy(){
+  for(const controller of controllers.values())if(controller.scope.isActive()&&
+    (controller.controls?.isBusy()||controller.root.contains(document.activeElement)))return true;
+  return false;
+}
+
+export async function mount(context,agent){
+  if(!supports(agent))return false;
+  if(!['owner','admin'].includes(context.state.identity.role)){
+    for(const controller of [...controllers.values()])discard(controller);
+    return false;
+  }
+  if(!context.isCurrent())return false;
+  // The host owns one layout surface for the Agent. Do not append this
+  // component beside generic settings/jobs and let the layout engine split it.
+  if(!context.cardTarget||context.cardTarget===context.panel||
+    typeof context.cardTarget.append!=='function'||typeof context.cardTarget.contains!=='function'||
+    context.cardTarget.dataset?.agentCardTarget!==agent.id||!context.cardTarget.isConnected)
+    throw new Error('宿主尚未支援單一卡片掛載接口；請先更新宿主整合，原有 Agent 設定與工作保留。');
+  const username=context.state.identity.username,key=username+'|'+agent.id;
+  ensureParking();
+  for(const controller of [...controllers.values()])if(controller.username!==username||controller.agentId!==agent.id)discard(controller);
+  const response=await fetch(BASE+'/binding',{credentials:'same-origin',cache:'no-store',headers:{'X-Blueprint-Account':encodeURIComponent(username)}});
+  if(!response.ok)throw new Error('客服工作區尚未接妥，請核對此 Agent 的專用服務及存取權限。');
+  const binding=await response.json();
+  if(!context.isCurrent())return false;
+  if(binding.agent_id!==agent.id||binding.product_id!==PRODUCT||binding.source_revision!==PACKAGE_REVISION||
+    binding.renderer!=='bluesai-management/1'||binding.api!=='bluesai-management-api/1'||binding.sse!==false)
+    throw new Error('客服來源或實例綁定不相符；沒有載入其他服務。');
+  const existing=controllers.get(key);
+  const attach=wrapper=>context.cardTarget.append(wrapper);
+  if(existing){
+    existing.context=context;
+    // Returning to the Agent home reuses this exact component and its drafts.
+    // Only the entry view changes; the selected conversation and tab survive.
+    if(typeof context.openCard==='function'){
+      existing.controls?.showEntry();existing.wrapper.dataset.bluesaiMode='entry';
+    }
+    attach(existing.wrapper);existing.scope.resume();return true;
+  }
+  const wrapper=document.createElement('section');wrapper.className='studio-card bluesai-native-card';
+  wrapper.id='bluesai-native-'+agent.id;wrapper.dataset.bluesaiVerified='1';wrapper.dataset.bluesaiMode='entry';
+  wrapper.setAttribute('aria-label','BlueSAI 客服工作區');
+  const root=buildComponent(COMPONENT_TREE);wrapper.append(root);attach(wrapper);
+  const controller={key,username,agentId:agent.id,context,root,wrapper,controls:null};
+  const scope=createScope(root,()=>controller.context,username);controller.scope=scope;
+  const modeObserver=new MutationObserver(()=>{
+    const next=root.querySelector('[data-screen="config"]').hidden?'entry':'expanded';
+    if(wrapper.dataset.bluesaiMode===next)return;
+    wrapper.dataset.bluesaiMode=next;
+    if(scope.isActive()){
+      if(next==='expanded'&&typeof controller.context.openCard==='function')controller.context.openCard(agent.id);
+      else controller.context.onRendered?.();
+    }
+  });
+  controller.modeObserver=modeObserver;
+  modeObserver.observe(root,{attributes:true,attributeFilter:['hidden'],subtree:true});
+  controllers.set(key,controller);
+  root.csBackend=createBackend(root,username,scope.isActive);
+  scope.window.csAgentBridge=createAgentBridge(scope);initializeInboxTools(root,scope);
+  try{controller.controls=await initializeWorkbench(root,scope);}
+  catch(error){discard(controller);throw error;}
+  return true;
+}
+
+if(typeof window!=='undefined'){
+  const renderer={mount,pause,isBusy,supports,layoutSpec};
+  // Only an explicitly loaded, reviewed module registers. An Agent manifest
+  // never supplies an executable URL or grants access to the host page.
+  const register=()=>window.BlueprintAgents?.registerCardRenderer?.(PRODUCT,renderer);
+  window.BlueprintBlueSAI=renderer;
+  register();
+  window.addEventListener('blueprint:agents-ready',register);
+  window.dispatchEvent(new Event('blueprint:bluesai-ready'));
+  window.addEventListener('hashchange',pause);
+  window.addEventListener('pagehide',()=>{for(const controller of [...controllers.values()])discard(controller);connectionObserver?.disconnect();});
+}

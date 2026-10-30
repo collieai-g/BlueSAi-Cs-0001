@@ -1,0 +1,21 @@
+export function createBackend(surface, username, isActive) {
+  const BASE='/api/agents/bluesai-cs-0001';
+  async function api(path,method='GET',data){
+    if(!isActive())throw new Error('客服卡片目前未開啟，請重新核對登入身份。');
+    const write=!['GET','HEAD'].includes(method);
+    const response=await fetch(BASE+path,{method,credentials:'same-origin',cache:'no-store',headers:{'X-Blueprint-Account':encodeURIComponent(username),...(write?{'X-Blueprint-Request':'1','Content-Type':'application/json'}:{})},body:write?JSON.stringify(data??{}):undefined});
+    if(!isActive())throw new Error('客服卡片或登入身份已切換；請重新讀取。');
+    const result=await response.json();
+    if(response.status===401||response.status===403)surface.hidden=true;
+    if(!response.ok){const error=new Error(result.error||'操作未完成。');error.status=response.status;throw error;}
+    if(method!=='GET'&&method!=='HEAD'){
+      // Only a change signal crosses tabs; never persist task text or credentials.
+      try{localStorage.setItem('bluesai-workbench-change',Date.now()+'-'+Math.random());}catch{}
+      window.dispatchEvent(new Event('bluesai-workbench-change'));
+    }
+    return result;
+  }
+  return {
+@@ENDPOINT_METHODS@@
+  };
+}

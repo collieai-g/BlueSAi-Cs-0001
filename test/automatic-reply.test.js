@@ -16,6 +16,7 @@ function fixture(t,{reply=async()=>answer,automaticAi=false,automaticKnowledge=f
   const provider={configured:true,deliveryEnabled:delivery,instance:'synthetic-native-fixture',async send(address,text){sent.push({address,text});return {providerId:'fixture-'+sent.length};}};
   const engine=new Engine(store,agent,provider,engineOptions);
   engine.configureInbox({enabled:true,automaticKnowledge,aiFallback:true,automaticAi});
+  if(engineOptions.localInbox)engine.setLocalInboxScope({receive:true,manual:true});
   t.after(async()=>{await engine.stop();store.close();});
   return {store,engine,agent,provider,calls,sent,incoming:(text,extra={})=>engine.receive({channel:'evolution',address:'85255550001@s.whatsapp.net',text,...extra})};
 }
@@ -227,4 +228,55 @@ test('self-to-self input stays read-only with every automatic policy flag enable
   assert.equal(f.store.get('SELECT COUNT(*) AS n FROM jobs').n,0);
   assert.throws(()=>f.engine.manualReply(r.conversationId,'不准回覆'),error=>error.status===409);
   assert.throws(()=>f.engine.takeover(r.conversationId,'ai'),error=>error.status===409);
+});
+
+
+test('local inbox automatically sends a matching approved FAQ on a new arrival without per-conversation opt-in',async t=>{
+  const f=fixture(t,{automaticKnowledge:true,automaticAi:true,engineOptions:{localInbox:true}});
+  f.engine.addFaq({question:'1',answer:'合成的固定答案',approved:true});
+  const r=f.incoming('1',{eventId:'local-faq-once'});
+  assert.equal(f.store.conversation(r.conversationId).state,'ai');
+  assert.equal(f.store.messages(r.conversationId).at(-1).status,'queued');
+  await f.engine.tick();assert.equal(f.sent.length,1);assert.equal(f.sent[0].text,'合成的固定答案');assert.equal(f.calls.length,0);
+  assert.equal(f.incoming('1',{eventId:'local-faq-once'}).duplicate,true);await f.engine.tick();assert.equal(f.sent.length,1);
+});
+
+test('local inbox follows sourced AI automation while clarification remains a draft',async t=>{
+  const f=fixture(t,{automaticAi:true,engineOptions:{localInbox:true}});
+  const r=f.incoming('合成的新問題');await f.engine.tick();
+  assert.equal(f.calls.length,1);assert.equal(f.sent.length,1);assert.equal(f.store.messages(r.conversationId).at(-1).status,'accepted');
+  const clarify=fixture(t,{automaticAi:true,engineOptions:{localInbox:true},reply:async()=>({text:'合成澄清問題？',decision:'clarify',sourceIds:[],engine:'codex-cli'})});
+  const c=clarify.incoming('另一個合成問題');await clarify.engine.tick();
+  assert.equal(clarify.calls.length,1);assert.equal(clarify.sent.length,0);assert.equal(clarify.store.messages(c.conversationId).at(-1).status,'draft');
+});
+
+test('local inbox preserves human and waiting control, and resume affects only the next new arrival',async t=>{
+  const f=fixture(t,{automaticAi:true,engineOptions:{localInbox:true}});
+  const r=f.incoming('交人工前的合成來訊');f.engine.takeover(r.conversationId);
+  f.incoming('真人處理中的新來訊');await f.engine.tick();
+  assert.equal(f.store.conversation(r.conversationId).state,'human');assert.equal(f.calls.length,0);assert.equal(f.sent.length,0);
+  f.store.run("UPDATE conversations SET state='waiting' WHERE id=?",r.conversationId);
+  f.incoming('等待本人處理的新來訊');await f.engine.tick();assert.equal(f.store.conversation(r.conversationId).state,'waiting');assert.equal(f.calls.length,0);
+  f.engine.takeover(r.conversationId,'ai');await f.engine.tick();assert.equal(f.sent.length,0);
+  f.incoming('交回後的新來訊');await f.engine.tick();assert.equal(f.calls.length,1);assert.equal(f.sent.length,1);
+});
+
+test('local inbox respects disabled automation and never sends an old draft when automation is later enabled',async t=>{
+  const f=fixture(t,{automaticKnowledge:false,automaticAi:false,engineOptions:{localInbox:true}});
+  f.engine.addFaq({question:'1',answer:'合成固定答案',approved:true});const old=f.incoming('1');
+  await f.engine.tick();const draft=f.store.messages(old.conversationId).at(-1);assert.equal(draft.status,'draft');assert.equal(f.sent.length,0);
+  f.engine.configureInbox({enabled:true,automaticKnowledge:true,aiFallback:true,automaticAi:true});await f.engine.tick();assert.equal(f.sent.length,0);
+  f.incoming('1',{eventId:'fresh-after-policy'});await f.engine.tick();assert.equal(f.sent.length,1);
+});
+
+test('local automatic queued replies cannot cross a disconnect, source revocation or uncertain send',async t=>{
+  const f=fixture(t,{automaticKnowledge:true,engineOptions:{localInbox:true}});
+  const faq=f.engine.addFaq({question:'1',answer:'合成固定答案',approved:true});
+  f.incoming('1');f.engine.setLocalInboxScope();f.engine.setLocalInboxScope({receive:true,manual:true});await f.engine.tick();assert.equal(f.sent.length,0);
+  const r=f.incoming('1',{eventId:'local-revocation'});f.store.run('UPDATE knowledge SET approved=0 WHERE id=?',faq.knowledgeId);
+  await f.engine.tick();assert.equal(f.sent.length,0);assert.equal(f.store.messages(r.conversationId).at(-1).status,'cancelled');
+  f.store.run('UPDATE knowledge SET approved=1 WHERE id=?',faq.knowledgeId);
+  f.provider.send=async()=>{f.sent.push({});throw Error('synthetic unknown outcome');};
+  const unknown=f.incoming('1',{eventId:'local-uncertain'});await f.engine.tick();assert.equal(f.sent.length,1);assert.equal(f.store.messages(unknown.conversationId).at(-1).status,'uncertain');
+  await f.engine.tick();assert.equal(f.sent.length,1);
 });

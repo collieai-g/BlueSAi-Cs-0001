@@ -1,4 +1,4 @@
-# Blueprint 整合套件 0.4.0-preview.1
+# Blueprint 整合套件 0.4.0-preview.2
 
 單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](../../docs/AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
 

@@ -1,6 +1,6 @@
 # 客服卡片與執行器架構
 
-版本：0.4.0-preview.1。權威介面及資料邊界見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
+版本：0.4.0-preview.2。權威介面及資料邊界見 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md)。
 
 ## 服務由左右協作形成
 
@@ -34,6 +34,8 @@ Blueprint Studio 提供外層工作空間、身份、導覽、主題及排版。
 ```
 
 `src/store.js` 負責資料及同步交易；`agent.js` 處理共用回覆格式、來源核對及選用模型 API；`codex-agent.js` 是獨立本機 CLI adapter；`engine.js` 管理接收、期限、人工控制和發送；`evolution.js` 適配供應商協定；`connections.js` 負責真實探測與接駁；`server.js` 提供認證及命名空間接口；`index.js` 管理生命週期。
+
+選用的 `src/managed-runtime.js` 與 `src/managed-control.js` 提供原生安裝器的獨立核心生命週期：先暫停啟動、token 控制、工作排空及正常關閉。宿主登記與實際核心切換分別核對；外部橋接不隨之更新。私人設定、版本審計及備份界線見 [原生受管更新](MANAGED_UPDATE.md)。
 
 ## 原生生成與後台控制
 
@@ -69,7 +71,7 @@ schema v1 保存 response_windows／handoff_tasks，v2 保存不可變 Codex／D
 
 ## 真實渠道與驗收範圍
 
-本機連結裝置橋接與客服可同機 loopback 運行，不需要把本機管理頁公開。第三方 Baileys 路線不是 Meta Cloud API；登入資料只在私人渠道目錄。原有指定號碼測試模式預設空名單；本人另可明確選擇所有新私人文字收件。接收權限與只回覆實際最近來訊客戶的發送授權分開，不能由開收件變成任意號碼廣播。詳見 [即時對話邏輯](LIVE_INBOX.md)。
+本機連結裝置橋接與客服可同機 loopback 運行，不需要把本機管理頁公開。第三方 Baileys 路線不是 Meta Cloud API；登入資料只在私人渠道目錄。卡片以本人明確選擇的所有新私人文字收件為流程，不提供指定測試名單表單，也不自動開啟收件。接收權限與只回覆實際最近來訊客戶的發送授權分開，不能由開收件變成任意號碼廣播。詳見 [即時對話邏輯](LIVE_INBOX.md)。
 
 Evolution 可作為獨立供應商；遠端服務須核對真正 callback 的 HTTPS 可達性與身份。兩種方式都不把手機 open 當作客服已收件。實際設定見 [WHATSAPP_RUNTIME.md](WHATSAPP_RUNTIME.md)。
 
@@ -81,4 +83,4 @@ Evolution 可作為獨立供應商；遠端服務須核對真正 callback 的 HT
 
 原生協作 manifest、只讀 preflight、安裝 journal、備份 coverage 及 CAS 登記 client 見 [INSTALL_PACKAGE.md](INSTALL_PACKAGE.md)。它們不自動部署後台，也不會啟動目前 Codex 對話成為持續 AI。
 
-完整通用 Sites renderer／D1 管理 API、宿主 manifest 原地升級與私人工作室現場驗收仍待完成。缺項必須阻擋相應安裝並說明下一步，不以搬入整頁客服或覆蓋宿主主列補位。歷史測試與舊截圖只屬當時版本的證據。
+原生宿主來源已加入同 ID 套件升級 PATCH，BlueSAI client 以明確的原 Agent ID 與固定升級 key 接駁並獨立讀回；見 [套件升級合約](INSTALL_PACKAGE.md#已授權的同-id-套件升級)。指定運行宿主是否已部署該能力仍須核對；完整通用 Sites renderer／D1 管理 API、Sites 升級適配與私人工作室現場驗收仍待完成。缺項必須阻擋相應安裝並說明下一步，不以搬入整頁客服或覆蓋宿主主列補位。歷史測試與舊截圖只屬當時版本的證據。

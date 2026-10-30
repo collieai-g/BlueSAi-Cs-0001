@@ -1,0 +1,115 @@
+{
+  "contract_version": 1,
+  "case_id": "bluesai-whatsapp-link-001",
+  "project_id": "bluesai-cs-0001",
+  "title": "連線診斷、QR 生命週期及可逆重新配對",
+  "source_revision": "df37caad532300c4bdf2c03c3d0b371be4c7db27",
+  "observations": [
+    {
+      "id": "fixed-connection-reason",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "以固定類別區分登入失效與等待取碼，排除敏感原始錯誤。"
+    },
+    {
+      "id": "stale-qr-visibility",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "失效、關閉及到期移除 QR；不因畫面到期自行建立連線。"
+    },
+    {
+      "id": "qr-encoding-generation",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "舊異步編碼不得覆蓋最新 QR 狀態。"
+    },
+    {
+      "id": "restart-required-bound",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "包括 515 的重試均受有限次數限制。"
+    },
+    {
+      "id": "stage-counters",
+      "classification": "verification_gap",
+      "disposition": "candidate_fix",
+      "summary": "以有限枚舉及計數描述註冊階段，不暴露帳戶或 QR。"
+    },
+    {
+      "id": "revoked-auth-reused",
+      "classification": "process_gap",
+      "disposition": "candidate_fix",
+      "summary": "維護工具在程序停止及備份覆蓋後保留舊 auth，準備新配對；同操作可接續。"
+    },
+    {
+      "id": "initial-provider-401",
+      "classification": "client_compatibility_gap",
+      "disposition": "external_validation",
+      "summary": "供應商拒絕的真正原因未證實；新配對成功不能證明特定 SDK 或帳戶類型缺陷。"
+    },
+    {
+      "id": "linked-phone-identity",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "已登入管理狀態只讀當前連結帳戶的正規化電話；失效、斷線及換帳戶清除，不輸出裝置識別、登入資料或健康端點電話。"
+    },
+    {
+      "id": "one-click-phone-link",
+      "classification": "process_gap",
+      "disposition": "candidate_fix",
+      "summary": "明確啟動後自動準備獨立本機手機接駁並等待掃碼及真實連線；無聲開啟收發，二維碼更新只讀現有連線。"
+    },
+    {
+      "id": "preview-auto-receive-preserve-pending",
+      "classification": "process_gap",
+      "disposition": "candidate_fix",
+      "summary": "本機手機連線後自動準備新私人文字收件；同帳戶保留已接收待辦，未知或更換帳戶時隔離，回覆依已保存政策及人工狀態。"
+    },
+    {
+      "id": "preview-automation-policy-shadowed",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "本機額外限制遮蔽已啟用的知識庫及 AI 自動回覆；移除強制人工及禁止自動發送，依新來訊與既有政策執行，保留人工接手、來源版本與舊任務不重放。"
+    },
+    {
+      "id": "existing-runtime-qr-refresh-capability",
+      "classification": "product_bug",
+      "disposition": "candidate_fix",
+      "summary": "既有本機橋接 runtime 已支援純讀 QR，但線性流程只替新建預覽 manager 更新到期 QR；依明確 localTest 能力讀回原橋接的新碼，不重新連線或另建手機資料。"
+    },
+    {
+      "id": "complete-sharded-bridge-regression",
+      "classification": "verification_gap",
+      "disposition": "candidate_fix",
+      "summary": "全部 68 個橋接合成案例按固定名稱分成三組互不重疊的檢查；安裝及 WhatsApp 案例均要求三組，避免分組後遺漏橋接回歸。"
+    }
+  ],
+  "expected": [
+    "診斷只呈現固定 lastReason，不把原始錯誤、登入資料或二維碼正文放進狀態訊息",
+    "登入失效提示先核對，不自動刪除 auth 或重試掃碼",
+    "原圖在失效、重新取碼或已關閉時移除；顯示到期不啟動 socket",
+    "舊 generation 的編碼成功或失敗不覆蓋目前結果",
+    "包括 515 的自動重連最多五次，open 後才重設",
+    "本機已連結手機自動準備新私人文字收件；本人逐筆發送和 AI 自動政策仍獨立",
+    "管理員連線狀態只顯示當前已連結帳戶的正規化電話；未知、斷線、重新配對及換帳戶時清除，不洩漏至健康或未登入端點",
+    "一鍵流程只在本人操作後準備獨立接駁；現有登入可接續，掃碼和連線狀態由真實回應確認，收發授權保持獨立。",
+    "重新啟動同帳戶保留及去重轉送已接收待辦；帳戶未明或不符時保留並隔離，不轉送或刪除。",
+    "本機新來訊按已啟用知識庫／AI 政策自動回覆；人工接手優先，舊草稿、排隊回覆及作業不因移除限制重新執行。",
+    "已配置原本機橋接且明確支援 localTest 的 runtime，不準備另一個預覽 manager；到期 QR 只讀原連線，不新增 connect 或更換帳戶。不支援此能力的服務不呼叫純讀 QR 路由。"
+  ],
+  "required_checks": [
+    "test_channels",
+    "test_ui",
+    "npm_check",
+    "relink_regression",
+    "test_bridge_1",
+    "test_bridge_2",
+    "test_bridge_3"
+  ],
+  "required_attestations": [],
+  "public_status": "candidate_not_submitted",
+  "instance_status": "external_private_evidence_only",
+  "scope": "合併診斷、QR、可逆 relink 與目前連結電話的通用範圍；舊收據不證明擴大後範圍。供應商根因、真手機、私人部署與送達各自驗收。 橋接回歸採三組互不重疊的固定名稱分片（23／23／22），全部 68 個案例仍為本案例必要檢查；其餘渠道及介面檢查另行執行，各檢查使用同一完整 154 個來源輸入。",
+  "registry": "feedback/registry.json",
+  "scope_revision": 8
+}

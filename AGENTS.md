@@ -2,12 +2,35 @@
 
 項目名稱：BlueSAI-客服。Agent 編號：`BlueSAi-Cs-#0001`。更改身份資料時，同步 agent.json、介面及文件。
 
+## 共用 Blue-loopback 入口
+
+開發回饋、實測修正、介面回歸及上游交接使用已安裝的 `$blue-loopback` Skill（顯示名稱 Blue-loopback），先從可用 Skill 目錄讀取其 SKILL.md。它透過 Git 外的私人綁定定位唯一 shared harness；本項目沿用 `feedback/harness.json`、`feedback/registry.json` 及 `feedback/installation-loop-001/case.json`，個別問題再讀對應案例。只維護共用 Skill／runner 一份，不把運行工作室補丁複製成另一套來源。Skill 缺失時明列未載入，仍可依 `docs/FEEDBACK_LOOP.md` 完成已授權工作；日常收件、回覆及知識保存不啟動工程 loopback。下列產品與資料保護規則繼續適用。
+
+## 共用 Blue-update 入口
+
+把已準備版本或完整 UI 改版交付到指定既有工作室時，使用已安裝的 `$blue-update` Skill，讀取其 SKILL.md 及本項目 `UPDATE_AI.txt`。Blue-loopback 負責通用來源回饋；Blue-update 負責已授權更新及同實例讀回，兩者共用唯一活動 runner 與私人綁定。綁定依序取 `BLUE_ENGINEERING_BINDINGS`、`BLUE_LOOPBACK_BINDINGS`；均未設定時讀 `$CODEX_HOME/blue-loopback/bindings.json`，CODEX_HOME 未設定則讀 `~/.codex/blue-loopback/bindings.json`。它是路由索引，不是操作授權或成功證據。共用 harness 的 `profiles/bluesai-cs-0001.json` 只索引本來源契約，不代替本項目的 adapter 或更新工具。Skill 缺失時明列缺項，依已核對的 UPDATE_AI 契約完成可做範圍，不猜測目標。
+
+完整 UI 更新以已批准的新設計及功能對應為準，可更換按鍵、分組、導航和版面；舊功能須有新入口、替代方式或明確移除決定。保留身份、私人內容、權限、有效連線、人工／AI 控制及可恢復草稿；個人化按相容性遷移並保留原值，不凍結舊幾何或重設全部偏好。詳細保留範圍及來源、生成、宿主包、掛載、快取載入的證據見 [docs/FEEDBACK_LOOP.md](docs/FEEDBACK_LOOP.md#固定產物更新同一實例)。下文 UI 描述是現行版本契約，已授權改版須同步更新契約與測試；隔離開發預覽不等於更新原工作室。
+
+同實例更新先核對預期 Agent ID；找不到時停止核對，不能讓 `ensure()` 落入新增分支。來源 revision／manifest 變更的宿主升級能力須實測；`HOST_PACKAGE_UPGRADE_REQUIRED` 保留現有實例及缺項，不能新增第二張卡片。`update-check` 只檢查私人計劃結構及宣告能力，不會補上宿主接口或證明已部署。只要求來源改動或計劃時，不順帶更新任何私人服務。
+
+## 工程四項規則
+
+受管原生更新使用 `docs/MANAGED_UPDATE.md`、`managed-component.json` 及 `src/managed-runtime.js`。它只管理獨立客服核心，啟動必定先暫停；宿主完成同 ID 升級及讀回才恢復入口。沿用 schema 7、外置私人資料及現有授權保護，橋接維持獨立。來源／測試工作不部署現有實例；不要由宿主 metadata 更新宣稱 runtime 已更新。
+
+詳細流程見 [docs/FEEDBACK_LOOP.md](docs/FEEDBACK_LOOP.md)，尚缺程式能力見其[待補工程能力](docs/FEEDBACK_LOOP.md#待補工程能力)。這些規則指導開發 AI，不啟用客服自動發送或背景更新。
+
+1. 通用修改先在已核對的唯一維護來源分支完成；宿主、Agent、adapter 各歸其來源。開發時不直接修改運行 checkout；已授權更新才按生命週期替換固定產物。測試工作室是驗收目標，不是第三份維護來源。
+2. 同根因沿用穩定 case ID，以合成操作、預期／實際結果及宿主／Agent／adapter 版本組合保留重現。可行時核對修前失敗、修後通過；未重現如實保留，相關回歸與既有必要檢查不省略。
+3. 已授權更新使用真正的原地升級路徑，保留同實例、Agent ID、歷史、設定、權限、有效連線及可恢復草稿；能力缺失不能用重建卡片、資料庫或登入補位。
+4. AI 接續完成已授權範圍，不逐階段重問。只改規則／來源不包含部署；只有輸入及能力範圍仍相符的證據可重用，不明結果先讀回。必須本人登入、選擇或補授權時才保留明確接續點。
+
 - 先讀 docs/HARNESS_ENGINEERING.md。產品以「本人＋左側 Codex／DOT＋右側客服卡片＋渠道後台」共同形成服務；以同一客服工作的要求、選定材料、版本、成果、核對與接續為開發單位，不以自研底層模型或照搬獨立客服平台取代此分工。
-- 新功能先區分個人化、專業工作組合及核心能力擴充，重用現有工具與資料邊界。私有工作資料與可重用方法分開；新自動檢查及測試 harness 列為下一版，既有必要測試與真實渠道驗收仍照常執行。原生 CLI 是獨立受限生成路線，不是喚醒或控制目前左側聊天、通用背景 DOT 或跨 AI 接續。
+- 新功能先區分個人化、專業工作組合及核心能力擴充，重用現有工具與資料邊界。私有工作資料與可重用方法分開；工程回饋依 docs/FEEDBACK_LOOP.md、feedback/registry.json 及 feedback/harness.json，重用外置共用 runner；AI 行為評估仍待後續，既有必要測試與真實渠道驗收照常執行。原生 CLI 是獨立受限生成路線，不是喚醒或控制目前左側聊天、通用背景 DOT 或跨 AI 接續。
 - 回覆路線分為 FAQ-only、本機原生 Codex CLI、選用模型 API。FAQ 優先不需要模型；aiFallback／automaticAi 預設 false，接駁成功不改政策。原生接駁必須由本人同意並通過真合成推理，沿用 CLI 的 ChatGPT 登入與額度，不搬移 auth、不另索 API key。登入可用、生成成功與真正客戶送達分開驗收。
 - 原生 CLI 每次只給單一客戶有限資料及已批准知識，使用 ephemeral 獨立工作、固定 schema 與後台來源核對；即時回覆推理最多 25 秒，獨立背景教學／對話整理推理最多 60 秒、服務等候含清理最多 65 秒，不延長客戶回覆窗口或阻塞人工發送。關閉 shell、MCP、plugins、hooks、電腦及瀏覽器等工具。執行檔只接受伺服器可信設定，runtime 在 Git 之外；不能讓客戶文字選路徑、開工具、改政策或直接執行渠道動作。
 - 產品是「AI → Agent 工作台」內的一個客服卡片項目。先讀 docs/AGENT_UI_CONTRACT.md 及 docs/BLUEPRINT_PLUGIN_DESIGN.md；精簡入口展開為同一實例的工作區，主要檢視是「收件匣／知識庫／管理」。對話優先；商戶設定、全域回覆政策及渠道教學放在管理，不再把收件匣藏於基本設定。保留舊 basic／training／connect 內部 ID 只作程式相容，不代表舊導覽仍為產品規格。
-- 收件匣按可用卡片寬度呈現列表、對話及上下文：864px 預設採雙欄加上下文抽屜，內容寬達 1080px 才可三欄；手機以列表／詳情返回切換。新來訊、切換對話或檢視不得清空未送出文字。只呈現後台已有狀態，不加入假 CRM、分派、SLA 或結案功能。
+- 展開後的客服主卡片固定 4:3，最小 576×432、預設 864×648、最大 1152×864；收件匣、知識庫及管理共用相同外框。收件匣對話區與訊息／回覆區、管理分類與內容區一直左右並排；不足最小寬度時在卡片外層水平捲動，不隱藏左區或改成二選一面板。詳情保留卡片內抽屜，內容高度跟隨卡片，訊息及分類各自捲動。新來訊、縮放、切換對話或檢視不得清空未送出文字。只呈現後台已有狀態，不加入假 CRM、分派、SLA 或結案功能。
 - 禁止把客服整頁或「總覽／工作／AI／資料」外殼當成 Agent 介面。禁止覆蓋宿主導覽、總覽卡片、工作記錄、資料、全域路由及 CSS；只掛載客服根節點及受限資料域。
 - 卡片前端只使用 /api/agents/bluesai-cs-0001 命名空間。不得把宿主整個 /api 代理到客服，不得共用或直接改寫宿主資料表；既有資料只經明確授權整合讀取。
 - 卡片移動、縮放及每類固定最小／最大尺寸由宿主整合落實。文件中的整合規格不可寫成已可用功能；未授權不要直接修改測試工作室。
@@ -21,7 +44,10 @@
 - WhatsApp 自傳測試預設只讀，另列且不計入客戶待處理或外部驗收。本人可明確同意獨立「本人對話回覆測試」：只有當次帳戶綁定隨機 grant 之後的新自身文字，才可 exact-approved FAQ 自動回覆或專用人工回覆；自動 FAQ 另需 self automaticFaq 及全域 enabled／automaticKnowledge；不呼叫 CLI／API／DOT、不發待處理通知。人工提交原子切至 self_human；明確交回 self_auto 只作用下一筆新來訊。舊 Hello 不重跑；已發送 ID＋address 的回聲不論 fromMe 值都攔截，uncertain 自停不重送。重啟、斷線、換帳戶或撤銷關閉 grant，外部顧客授權不變。見 docs/SELF_REPLY_TEST.md。
 - FAQ 必須唯一吻合且已確認、仍有效；AI answer 須有批准來源才可按獨立授權自動發送，clarify 先存草稿，退款／衝突／無依據／失敗／逾時轉人工。目前聊天的 DOT 工具仍只保存最新版本綁定草稿，不能因開啟編輯器就聲稱已處理或已發送。
 - 人工對話學習只收錄一般渠道已成功提交的 staff 示範，保留實際角色及來源，使用有界去識別材料。AI 提議一律待本人核對，事實／處理流程／風格分開；procedure 不能充當到貨時間等事實來源。pending 分析不 revise、不取消人工發送，正式批准才改知識 revision。模型未接駁不能假裝已理解；自動整理與自動發送分開。詳見 docs/KNOWLEDGE_LEARNING.md。
-- 修改後執行 npm test 及 npm run check。涉及介面時，用瀏覽器驗證主要操作和手機版面。
+- 程式或測試修改後執行 npm test 及 npm run check，並依影響補案例檢查；涉及介面時，用瀏覽器驗證主要操作和手機版面。純規則／文件修改只檢查差異格式、連結、命令與已有／待實作能力描述，不為此啟動服務、生成產物或執行整套程式回歸；這項文件例外不減少後續程式交付的既有必要檢查或 CI。
 - 介面沿用 Blueprint Studio：先讀 docs/UI_DESIGN.md 及 UI_SOURCE.json。不要直接改 vendor CSS；客服樣式修改 design/customer-agent-card-design.html 後經建置產生，宿主只載入 agent-card.css 的根節點內樣式。public/style.css 僅供舊診斷頁，不能加入宿主卡片 bundle。升級共用樣式時同步來源版本、雜湊及 MIT 聲明。
 - 所有對外狀態必須依實際結果：configured 不是 connected，accepted 不是 delivered，repository written 不是 deployed。
 - 未獲使用者明確授權，不要更改 GitHub 倉庫可見性、覆寫他人提交或加入付費資源。
+
+- 開發回饋以同一 canonical checkout 為準；運行實例來源只讀，通用改動回到本來源。案例 ID 不重建，私人綁定／證據在 Git 之外。執行 npm run feedback:audit，所有來源差異都須映射；100% 映射不代表已部署。
+- 修改生成來源後執行 python tools/build-workbench.py；npm run check 會唯讀核對生成結果。宿主資產只由 tools/build-blueprint-card.py 產生，保留同一對話的開始人工回覆／交回知識庫／AI 語意，不維護第二份介面。

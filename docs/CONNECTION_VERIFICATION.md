@@ -34,6 +34,6 @@
 
 真實 WhatsApp 手機收件、真實帳戶授權、公開 HTTPS 可達性、目前客戶端的原生本人送出，以及私人 Site 安裝均未執行。教學的安裝按鍵只準備指引草稿，不會自行部署或開通帳戶。
 
-完整通用 Sites D1／R2 管理 API、原生三分頁 renderer、宿主 manifest 原地升級及宿主共用安裝協調器整合仍待實作。套件目前提供需求合約、阻擋檢查及可接入的工具；[計劃對應](INSTALL_PACKAGE.md#計劃落地與剩餘相容工作) 明列交付及缺項，不把整份原計劃標為完成。
+原生宿主與 BlueSAI 來源已加入同 ID 套件升級 PATCH／client 及合成檢查；指定運行宿主的能力與真正更新仍需另驗。完整通用 Sites D1／R2 管理 API、原生 renderer、Sites 套件升級適配及宿主共用安裝協調器整合仍待完成。套件提供需求合約、阻擋檢查及可接入的工具；[計劃對應](INSTALL_PACKAGE.md#計劃落地與剩餘相容工作) 明列交付及缺項，不把整份原計劃標為完成。
 
 GitHub Actions 設定 Windows／Ubuntu matrix，針對同一提交測試、只讀 preflight 及生成固定雜湊產物；CI 的實際狀態須按該 PR／提交的執行結果核對，配置 workflow 本身不代表 CI 通過。

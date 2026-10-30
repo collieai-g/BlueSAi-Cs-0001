@@ -1,0 +1,657 @@
+{
+  "schema_version": 1,
+  "project_id": "bluesai-cs-0001",
+  "scope_id": "installation-feedback-v1",
+  "baseline_commit": "df37caad532300c4bdf2c03c3d0b371be4c7db27",
+  "cases": [
+    {
+      "case_id": "bluesai-whatsapp-link-001",
+      "title": "連線診斷、QR 生命週期及可逆重新配對",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "fixed-connection-reason",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "以固定類別區分登入失效與等待取碼，排除敏感原始錯誤。"
+        },
+        {
+          "id": "stale-qr-visibility",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "失效、關閉及到期移除 QR；不因畫面到期自行建立連線。"
+        },
+        {
+          "id": "qr-encoding-generation",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "舊異步編碼不得覆蓋最新 QR 狀態。"
+        },
+        {
+          "id": "restart-required-bound",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "包括 515 的重試均受有限次數限制。"
+        },
+        {
+          "id": "stage-counters",
+          "classification": "verification_gap",
+          "disposition": "candidate_fix",
+          "summary": "以有限枚舉及計數描述註冊階段，不暴露帳戶或 QR。"
+        },
+        {
+          "id": "revoked-auth-reused",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "維護工具在程序停止及備份覆蓋後保留舊 auth，準備新配對；同操作可接續。"
+        },
+        {
+          "id": "initial-provider-401",
+          "classification": "client_compatibility_gap",
+          "disposition": "external_validation",
+          "summary": "供應商拒絕的真正原因未證實；新配對成功不能證明特定 SDK 或帳戶類型缺陷。"
+        },
+        {
+          "id": "linked-phone-identity",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "已登入管理狀態只讀當前連結帳戶的正規化電話；失效、斷線及換帳戶清除，不輸出裝置識別、登入資料或健康端點電話。"
+        },
+        {
+          "id": "one-click-phone-link",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "明確啟動後自動準備獨立本機手機接駁並等待掃碼及真實連線；無聲開啟收發，二維碼更新只讀現有連線。"
+        },
+        {
+          "id": "preview-auto-receive-preserve-pending",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "本機手機連線後自動準備新私人文字收件；同帳戶保留已接收待辦，未知或更換帳戶時隔離，回覆依已保存政策及人工狀態。"
+        },
+        {
+          "id": "preview-automation-policy-shadowed",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "本機額外限制遮蔽已啟用的知識庫及 AI 自動回覆；移除強制人工及禁止自動發送，依新來訊與既有政策執行，保留人工接手、來源版本與舊任務不重放。"
+        },
+        {
+          "id": "existing-runtime-qr-refresh-capability",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "既有本機橋接 runtime 已支援純讀 QR，但線性流程只替新建預覽 manager 更新到期 QR；依明確 localTest 能力讀回原橋接的新碼，不重新連線或另建手機資料。"
+        },
+        {
+          "id": "complete-sharded-bridge-regression",
+          "classification": "verification_gap",
+          "disposition": "candidate_fix",
+          "summary": "全部 68 個橋接合成案例按固定名稱分成三組互不重疊的檢查；安裝及 WhatsApp 案例均要求三組，避免分組後遺漏橋接回歸。"
+        }
+      ],
+      "files": [
+        "feedback/bluesai-whatsapp-link-001/case.json",
+        "feedback/bluesai-whatsapp-link-001/UPSTREAM_HANDOFF.md",
+        "integrations/whatsapp-local/README.md",
+        "integrations/whatsapp-local/bridge.js",
+        "integrations/whatsapp-local/bridge.test.js",
+        "public/workbench.js",
+        "src/connections.js",
+        "test/whatsapp-link-diagnostics.test.js",
+        "test/whatsapp-qr-ui.test.js",
+        "integrations/whatsapp-local/maintenance/relink_auth.py",
+        "integrations/whatsapp-local/maintenance/test_relink_auth.py",
+        "integrations/whatsapp-local/maintenance/README.md",
+        "test/whatsapp-runtime.test.js",
+        "src/local-whatsapp-preview.js",
+        "src/workbench.js",
+        "src/server.js",
+        "integrations/whatsapp-local/start.js",
+        "test/local-whatsapp-preview.test.js",
+        "test/workbench.test.js",
+        "feedback/harness.json",
+        "feedback/installation-loop-001/case.json"
+      ],
+      "checks": [
+        "integrations/whatsapp-local/bridge.test.js",
+        "test/whatsapp-link-diagnostics.test.js",
+        "test/whatsapp-qr-ui.test.js",
+        "integrations/whatsapp-local/maintenance/test_relink_auth.py",
+        "test/whatsapp-runtime.test.js",
+        "test/local-whatsapp-preview.test.js",
+        "test/workbench.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-package-001",
+      "title": "固定產物與 Windows 換行一致",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "git-archive-crlf",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "打包 tar 與 Git blob inventory 必須逐檔同雜湊，不能受主機 autocrlf 設定改變。"
+        }
+      ],
+      "files": [
+        "tools/package-release.js",
+        "test/install.test.js"
+      ],
+      "checks": [
+        "test/install.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-ui-source-001",
+      "title": "同一設計來源產生獨立及宿主卡片",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "generated-patch-erased",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "QR 修正回寫設計來源，重新生成不得復原缺陷。"
+        },
+        {
+          "id": "neutral-phone-label",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "手機連線燈只表達已核對手機狀態，電話只取當前帳戶讀回；未核對、失效或斷線不得顯示綠燈或舊電話。"
+        },
+        {
+          "id": "human-auto-controls",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "保留同一對話的知識庫／AI 及人工接手控制與動態標籤。"
+        },
+        {
+          "id": "native-asset-drift",
+          "classification": "integration_gap",
+          "disposition": "candidate_fix",
+          "summary": "原生宿主資產由明確模板及同一元件生成，產物與來源可核對，禁止雙份獨立 UI 修補。"
+        },
+        {
+          "id": "management-workspace",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "管理採五個持續可見分類與原位工作面；WhatsApp 四步可直選，安裝協助在目前渠道返回，保留現行表單及未儲存輸入。"
+        },
+        {
+          "id": "ai-provider-selection",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "精簡 AI 接駁介面，選擇供應商及參考模型；未支援的供應商不得提交，指引草稿不含金鑰，不改已授權接駁。"
+        },
+        {
+          "id": "empty-inbox-controls",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "空收件匣按真實收件狀態顯示下一步，人工及知識庫／AI 控制保持可見，未選對話時說明不可操作。"
+        },
+        {
+          "id": "inbox-streamlined-controls",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "收件匣移除手動更新與人工接手／連線測試列表篩選及專用邏輯；保留自動同步、最後成功更新24小時時間及對話內人工控制。"
+        },
+        {
+          "id": "conversation-context-details",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "以真實已有欄位整理對話、處理方式、回覆狀態與引用來源，未知欄位不虛構，桌面及手機詳情保持可操作。"
+        },
+        {
+          "id": "dedicated-card-target",
+          "classification": "integration_gap",
+          "disposition": "candidate_fix",
+          "summary": "原生 renderer 只掛入宿主專用卡片容器，缺少合約時明確拒絕；登記時序、同一草稿 DOM 與帳戶隔離用合成案例驗證。"
+        },
+        {
+          "id": "complete-generated-source-pin",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "宿主產物版本核對包括實際設計、元件、模板及產生程式；只改模板或產生器不可沿用舊 commit 的已核對標示。"
+        },
+        {
+          "id": "compact-card-proportions",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "客服工作區的文字、控制項、對話泡泡及回覆框比例過大；在同一設計來源精簡尺寸與留白，按可用卡片空間排版，保留配色、人工／AI 控制、詳情與未送出輸入，不以整頁 zoom 或 transform 縮放。"
+        },
+        {
+          "id": "reference-entry-preserved",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "Agent 工作台首頁以已批准的原生客服入口取代通用摘要卡，保留圖示、名稱、編號、管理、真實 WhatsApp 狀態及開啟收件匣；首頁與展開沿用同一客服根節點及對話草稿，只調整呈現比例，不硬編碼已接駁或搬入參考圖片的私人資料。"
+        },
+        {
+          "id": "persistent-inbox-management-panes",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "卡片縮窄時舊手機模式會隱藏對話區或對話內容，管理分類亦改變位置及隱藏副文字。本輪按已批准尺寸合約保留同一卡片內的客戶諮詢區、對話及管理分類，依可用空間調整欄寬、換行與區內捲動，不以尺寸斷點取消主要工作區。"
+        },
+        {
+          "id": "container-owned-workspace-height",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "工作區高度原依瀏覽器視窗計算，與實際宿主卡片尺寸脫節；改由同一卡片外框分配頂列、分頁、內容及頁尾高度，三個主要檢視共用尺寸，長內容在各自區域捲動並保留可到達的回覆欄及操作。"
+        },
+        {
+          "id": "four-three-card-sizing",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "同一張客服卡片沿已批准的 4:3 外框比例縮放，尺寸來源、最小／預設／最大範圍及窄畫面處理與原生宿主合約一致；保留現行配色、可閱讀文字與未儲存輸入，不使用整頁 zoom 或 transform 縮放代替排版。"
+        },
+        {
+          "id": "generated-checkout-newlines",
+          "classification": "client_compatibility_gap",
+          "disposition": "candidate_fix",
+          "summary": "Windows Git 簽出可能把來源及生成資產轉成 CRLF；生成內容驗收沿用 Python 的換行正規化，同時保留 HTML 與 CSS 完整內容相等及資產邊界斷言。"
+        }
+      ],
+      "files": [
+        "design/customer-agent-card-design.html",
+        "docs/UI_DESIGN.md",
+        "docs/AGENT_UI_CONTRACT.md",
+        "docs/CONNECTION_GUIDE.md",
+        "tools/build-workbench.py",
+        "public/agent-card.html",
+        "public/agent-card.css",
+        "public/agent-handoff.js",
+        "public/inbox-tools.js",
+        "public/workbench-api.js",
+        "public/workbench.js",
+        "tools/build-blueprint-card.py",
+        "test/card-isolation.test.js",
+        "test/management-ui.test.js",
+        "test/workbench-generation.test.js",
+        "public/workbench.html",
+        "public/workbench.css",
+        "integrations/blueprint/native/backend.js.tmpl",
+        "integrations/blueprint/native/host-bounds.css",
+        "integrations/blueprint/native/README.md",
+        "integrations/blueprint/native/renderer.js.tmpl",
+        "test/ai-management-ui.test.js",
+        "test/inbox-guidance-ui.test.js",
+        "tools/workbench-browser-fixture.js",
+        "test/inbox-details-ui.test.js",
+        "test/native-card-mount.test.js",
+        "docs/BLUEPRINT_PLUGIN_DESIGN.md",
+        "test/ui.test.js"
+      ],
+      "checks": [
+        "test/card-isolation.test.js",
+        "test/management-ui.test.js",
+        "test/whatsapp-qr-ui.test.js",
+        "test/workbench-generation.test.js",
+        "test/ui.test.js",
+        "test/ai-management-ui.test.js",
+        "test/inbox-guidance-ui.test.js",
+        "test/inbox-details-ui.test.js",
+        "test/native-card-mount.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-reply-readiness-001",
+      "title": "分開核對收件、發送、知識與模型",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "receive-scope",
+          "classification": "configuration_gap",
+          "disposition": "documented_workflow",
+          "summary": "卡片移除指定測試名單流程；新私人文字收件與最近來訊回覆各需明確同意，不由電話綠燈或名單移除自動啟用。"
+        },
+        {
+          "id": "manual-send-readiness",
+          "classification": "configuration_gap",
+          "disposition": "documented_workflow",
+          "summary": "人工收件匣模式、近期來訊發送授權、人工接手及逐筆送達各自核對。"
+        },
+        {
+          "id": "native-inference",
+          "classification": "configuration_gap",
+          "disposition": "documented_workflow",
+          "summary": "本人同意後通過真正合成推理，再設定 AI 後備及自動答。"
+        },
+        {
+          "id": "new-message-trigger",
+          "classification": "configuration_gap",
+          "disposition": "documented_workflow",
+          "summary": "知識或政策更新與交回 AI 不重跑舊訊息；用新來訊驗證。"
+        },
+        {
+          "id": "knowledge-vs-faq",
+          "classification": "configuration_gap",
+          "disposition": "documented_workflow",
+          "summary": "已確認 FAQ 精確比對與已確認知識供模型理解分開；加入資料不主動通知客戶。"
+        },
+        {
+          "id": "preview-native-codex",
+          "classification": "configuration_gap",
+          "disposition": "candidate_fix",
+          "summary": "隔離預覽可按本人同意核對原生 Codex 與合成推理，獨立於渠道收發；其他本機助手尚待各自安全適配。"
+        },
+        {
+          "id": "local-preview-receive-path",
+          "classification": "product_bug",
+          "disposition": "candidate_fix",
+          "summary": "本機手機連線後自動準備收件，保留原帳戶、資料與既有回覆政策；本機不再額外強制人工批准，人工接手和舊作業不重放仍須核對。"
+        }
+      ],
+      "files": [
+        "docs/CONNECTION_GUIDE.md",
+        "INSTALL_AI.txt",
+        "README.md",
+        "docs/INSTALL.md",
+        "docs/WHATSAPP_RUNTIME.md",
+        "docs/LIVE_INBOX.md",
+        "docs/ARCHITECTURE.md",
+        "docs/FEEDBACK_LOOP.md",
+        "test/native-connections.test.js",
+        "src/workbench.js",
+        "src/connections.js",
+        "src/engine.js",
+        "src/server.js",
+        "src/local-whatsapp-preview.js",
+        "test/local-whatsapp-preview.test.js",
+        "test/management-ui.test.js",
+        "test/automatic-reply.test.js"
+      ],
+      "checks": [
+        "test/knowledge-inbox.test.js",
+        "test/automatic-reply.test.js",
+        "test/native-connections.test.js",
+        "test/whatsapp-inbox-scope.test.js",
+        "test/local-whatsapp-preview.test.js",
+        "test/management-ui.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-install-state-001",
+      "title": "單一回饋清單與 scoped 收據接續",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "case-id-collision",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "同案例的不同觀察合併到同一宣告；不可用重複 ID 隱藏部分範圍。"
+        },
+        {
+          "id": "stale-progress-summary",
+          "classification": "process_gap",
+          "disposition": "documented_workflow",
+          "summary": "具來源、時間與 scope 的不可變收據取代舊摘要；歷史不當目前狀態。"
+        },
+        {
+          "id": "single-runner",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "共用 runner 只有一份；項目提供 Node／Python 薄宣告，實際 runtime 指紋綁定檢查。"
+        },
+        {
+          "id": "same-instance-update",
+          "classification": "integration_gap",
+          "disposition": "candidate_fix",
+          "summary": "以 expected_agent_id 與固定 upgrade_key 接原生宿主同 ID 套件 PATCH，保留相容設定並獨立讀回；缺目標不新建，舊宿主失敗不回退，未知結果不盲重試。"
+        },
+        {
+          "id": "syntax-scan-dependency-boundary",
+          "classification": "process_gap",
+          "disposition": "candidate_fix",
+          "summary": "檢查工具覆蓋自家來源，同時排除已安裝依賴及版本控制中繼目錄。"
+        }
+      ],
+      "files": [
+        "tools/feedback-audit.js",
+        "test/feedback-audit.test.js",
+        "feedback/registry.json",
+        "feedback/harness.json",
+        "feedback/installation-loop-001/case.json",
+        "docs/FEEDBACK_LOOP.md",
+        "docs/INSTALL_PACKAGE.md",
+        "docs/CONNECTION_VERIFICATION.md",
+        "docs/ARCHITECTURE.md",
+        "src/install-blueprint.js",
+        "UPDATE_AI.txt",
+        "AGENTS.md",
+        "README.md",
+        "package.json",
+        "tools/check.js",
+        "docs/HARNESS_ENGINEERING.md",
+        ".github/workflows/ci.yml",
+        ".gitignore",
+        "docs/DEVELOPMENT_PLAN.md"
+      ],
+      "checks": [
+        "test/feedback-audit.test.js",
+        "test/install.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-runtime-recovery-001",
+      "title": "重啟後的程序擁有者與授權",
+      "owner_project": "private-runtime",
+      "observations": [
+        {
+          "id": "stale-lease-after-reboot",
+          "classification": "process_gap",
+          "disposition": "documented_workflow",
+          "summary": "確認 PID、端口及來源身份後保留舊 lease；重啟不重置資料，也不假定發送授權仍有效。"
+        }
+      ],
+      "files": [
+        "docs/FEEDBACK_LOOP.md",
+        "UPDATE_AI.txt"
+      ],
+      "checks": [
+        "test/whatsapp-inbox-scope.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-data-preservation-001",
+      "title": "資料與備份覆蓋屬於各實例",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "backup-scope",
+          "classification": "verification_gap",
+          "disposition": "documented_workflow",
+          "summary": "宿主備份不覆蓋外部 SQLite／auth；既有有效覆蓋可重用，後續新資料需要新 checkpoint。"
+        },
+        {
+          "id": "same-record-readback",
+          "classification": "verification_gap",
+          "disposition": "documented_workflow",
+          "summary": "同 ID 保存、重啟及隔離還原驗證與真實渠道證據分開。"
+        }
+      ],
+      "files": [
+        "docs/FEEDBACK_LOOP.md",
+        "UPDATE_AI.txt"
+      ],
+      "checks": [
+        "test/install.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "bluesai-ui-acceptance-001",
+      "title": "版面與真實瀏覽器驗收",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "real-browser-zoom",
+          "classification": "verification_gap",
+          "disposition": "external_validation",
+          "summary": "收件匣及管理分類工作面的合成 DOM 與窄畫面驗證不取代真正 200% 瀏覽器縮放；未驗收項目保持待辦。"
+        }
+      ],
+      "files": [
+        "docs/FEEDBACK_LOOP.md"
+      ],
+      "checks": [
+        "test/ui.test.js"
+      ],
+      "references": []
+    },
+    {
+      "case_id": "blueprint-login-001",
+      "title": "宿主登入與接駁相容性",
+      "owner_project": "blueprint-studio",
+      "observations": [
+        {
+          "id": "embedded-basic-auth",
+          "classification": "client_compatibility_gap",
+          "disposition": "external_dependency",
+          "summary": "一次內置瀏覽器 Basic 登入觀察不能推論所有客戶端；沿用宿主登入方案。"
+        },
+        {
+          "id": "gateway-origin-and-methods",
+          "classification": "integration_gap",
+          "disposition": "external_dependency",
+          "summary": "同源表單、scoped PUT／DELETE 由宿主接駁維護；客服不得複製另一套登入。"
+        }
+      ],
+      "files": [
+        "docs/FEEDBACK_LOOP.md"
+      ],
+      "checks": [],
+      "references": [
+        "https://github.com/collieai-g/Blueprint-Studio-Open-Source/pull/18"
+      ]
+    },
+    {
+      "case_id": "blueprint-bluesai-native-001",
+      "title": "宿主登記、原生 renderer 與受限 API",
+      "owner_project": "blueprint-studio",
+      "observations": [
+        {
+          "id": "native-loader-and-api",
+          "classification": "integration_gap",
+          "disposition": "external_dependency",
+          "summary": "宿主維護原生 loader、固定公司／Agent 邊界、CSRF 及代理；客服供應生成元件。"
+        },
+        {
+          "id": "host-manifest-upgrade",
+          "classification": "integration_gap",
+          "disposition": "external_dependency",
+          "summary": "原生宿主來源候選以既有 PATCH 提供同 ID 套件升級；指定宿主部署及 Sites 適配仍需另驗，沒有相容能力時不可另加第二張卡片。"
+        },
+        {
+          "id": "split-native-agent-card",
+          "classification": "product_bug",
+          "disposition": "referenced_maintenance",
+          "summary": "宿主同時顯示通用詳情與原生客服，版面把設定、工作及客服拆開；Blueprint 同編號來源案例提供單一排版外框與進階入口，客服配合專用掛載點。實例更新另行授權。"
+        },
+        {
+          "id": "native-loading-settings-flash",
+          "classification": "product_bug",
+          "disposition": "referenced_maintenance",
+          "summary": "開啟原生客服時短暫露出通用 Agent 設定，原因為宿主在異步掛載前先渲染標準內容；Blueprint 同編號案例處理離屏準備、一次切換、失敗 fallback 與過期路由隔離，客服保留同一元件及草稿。"
+        },
+        {
+          "id": "home-native-entry-lifecycle",
+          "classification": "integration_gap",
+          "disposition": "referenced_maintenance",
+          "summary": "Agent 工作台首頁的原生客服入口及展開由宿主同編號案例接駁，重用同一元件、帳戶及草稿；禁止首頁假狀態或另建客服卡片，通用 Agent 保留原有摘要入口。"
+        },
+        {
+          "id": "native-ratio-control-parity",
+          "classification": "product_bug",
+          "disposition": "referenced_maintenance",
+          "summary": "原生卡片的 4:3 比例須由 Blueprint 同編號來源責任接駁到實際版面引擎；拖動大小把手、鍵盤方向鍵及直接輸入尺寸採用同一限制與比例規則，不能只在客服 CSS 或數值標示中維持比例。"
+        },
+        {
+          "id": "native-ratio-layout-continuity",
+          "classification": "product_bug",
+          "disposition": "referenced_maintenance",
+          "summary": "原生比例調整與重新開啟須保留同一 Agent、原頁面及未涉及的版面／偏好。舊尺寸依新合約顯示或經明確操作遷移，不可為配合比例重設全工作室；以相同固定宿主及客服來源作合成拖動、鍵盤、尺寸輸入、重新載入及窄畫面驗收，來源映射不代表實例已更新。"
+        }
+      ],
+      "files": [
+        "docs/FEEDBACK_LOOP.md",
+        "UPDATE_AI.txt"
+      ],
+      "checks": [
+        "test/install.test.js"
+      ],
+      "references": [
+        "https://github.com/collieai-g/Blueprint-Studio-Open-Source"
+      ]
+    },
+    {
+      "case_id": "bluesai-managed-update-001",
+      "title": "獨立客服核心受管更新與安全排空",
+      "owner_project": "bluesai-cs-0001",
+      "observations": [
+        {
+          "id": "actual-managed-core-runtime",
+          "classification": "integration_gap",
+          "disposition": "candidate_fix",
+          "summary": "新增真實 Node 核心入口、每次啟動控制 token、先暫停及同 ID 讀回後恢復；不以宿主登記代替程序更新。"
+        },
+        {
+          "id": "drain-before-offline-backup",
+          "classification": "verification_gap",
+          "disposition": "candidate_fix",
+          "summary": "在途生成、發送、學習及已斷線 HTTP 寫入排空；503 重試交外部持久橋接，uncertain 不重送，授權不自動恢復。"
+        },
+        {
+          "id": "runtime-job-source-binding",
+          "classification": "verification_gap",
+          "disposition": "candidate_fix",
+          "summary": "新開始工作保存產物、prompt、政策、模型及知識證據，跨 release 的已開始工作交人工核對，維持核心 schema 7。"
+        },
+        {
+          "id": "existing-studio-and-live-channel",
+          "classification": "verification_gap",
+          "disposition": "external_validation",
+          "summary": "本輪僅公開來源與合成測試；現有工作室、橋接更新、真實渠道及客戶送達須分開授權驗收。"
+        }
+      ],
+      "files": [
+        "managed-component.json",
+        "src/managed-runtime.js",
+        "src/managed-control.js",
+        "src/engine.js",
+        "src/server.js",
+        "src/knowledge-learning.js",
+        "test/managed-runtime.test.js",
+        "docs/MANAGED_UPDATE.md",
+        "docs/ARCHITECTURE.md",
+        "AGENTS.md",
+        "package.json",
+        "agent.json",
+        "integrations/blueprint/agent.json",
+        "integrations/blueprint/package.json",
+        "integrations/blueprint/README.md",
+        "README.md",
+        "INSTALL_AI.txt",
+        "docs/AGENT_UI_CONTRACT.md",
+        "docs/CONNECTION_GUIDE.md",
+        "docs/INSTALL.md",
+        "docs/INSTALL_PACKAGE.md",
+        "docs/LIVE_INBOX.md",
+        "docs/UI_DESIGN.md",
+        "docs/WHATSAPP_RUNTIME.md",
+        "feedback/registry.json",
+        "feedback/harness.json",
+        "feedback/installation-loop-001/case.json",
+        "test/knowledge-learning.test.js"
+      ],
+      "checks": [
+        "test/managed-runtime.test.js",
+        "test/knowledge-learning.test.js"
+      ],
+      "references": []
+    }
+  ]
+}

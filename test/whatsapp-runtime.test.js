@@ -142,6 +142,55 @@ test('webhook registration uses only configured callback and verifies readback w
   assert.equal(f.connections.status().whatsapp.receiveEnabled, false);
 });
 
+test('only authenticated connection-state owner identity becomes an admin-visible linked phone',async t=>{
+  let response={instance:{state:'open',ownerJid:'85255550000_2:17@s.whatsapp.net'},session:{secret:'private-provider-session'},lid:'123456789@lid'};
+  const f=await httpFixture(t,{fetchImpl:async()=>Response.json(response)});
+  assert.equal(f.connections.status().whatsapp.linkedPhone,null);
+  await f.connections.whatsapp({});
+  assert.equal(f.connections.status().whatsapp.linkedPhone,null,'a connect response is not a verified owner readback');
+  assert.equal((await f.connections.checkWhatsApp()).linkedPhone,'85255550000');
+  const state=(await f.call('/api/workbench')).data;
+  assert.equal(state.connections.whatsapp.linkedPhone,'85255550000');
+  assert.doesNotMatch(JSON.stringify(state),/@s\.whatsapp\.net|@lid|private-provider-session/);
+  assert.equal((await fetch(f.base+'/api/workbench')).status,401);
+  assert.doesNotMatch(await(await fetch(f.base+'/healthz')).text(),/85255550000|linkedPhone/);
+  for(const [owner,expected]of [
+    [{instance:{linkedPhone:'85255550001'}},'85255550001'],
+    [{ownerJid:'85255550002:3@s.whatsapp.net'},'85255550002'],
+    [{instance:{ownerJid:'123456789:4@lid'}},null],
+    [{instance:{ownerJid:'85255550000@g.us'}},null],
+    [{instance:{linkedPhone:'+85255550000'}},null],
+    [{instance:{linkedPhone:85255550000}},null],
+    [{instance:{linkedPhone:'85255550000',ownerJid:'85255550001@s.whatsapp.net'}},null],
+    [{instance:{ownerJid:'85255550000@s.whatsapp.net?session=private'}},null],
+    [{instance:{}},null],
+  ]){
+    response={...owner,instance:{...owner.instance,state:'open'}};
+    await f.connections.checkWhatsApp();assert.equal(f.connections.status().whatsapp.linkedPhone,expected);
+  }
+});
+
+test('linked phone readback clears on pending, missing, closed and failed checks and follows the current account',async t=>{
+  let response={instance:{state:'open',linkedPhone:'85255550000'}},pendingResponse=null;
+  const f=fixture(t,{fetchImpl:async()=>pendingResponse?pendingResponse():Response.json(response)});
+  await f.connections.checkWhatsApp();assert.equal(f.connections.status().whatsapp.linkedPhone,'85255550000');
+  let release;
+  pendingResponse=()=>new Promise(resolve=>{release=resolve;});
+  const checking=f.connections.checkWhatsApp();
+  assert.equal(f.connections.status().whatsapp.linkedPhone,null,'do not display the previous account while awaiting a new identity');
+  release(Response.json({instance:{state:'open',linkedPhone:'85255550001'}}));await checking;pendingResponse=null;
+  assert.equal(f.connections.status().whatsapp.linkedPhone,'85255550001');
+  for(const state of ['close','connecting','unknown']){
+    response={instance:{state,linkedPhone:'85255550001'}};await f.connections.checkWhatsApp();
+    assert.equal(f.connections.status().whatsapp.linkedPhone,null);
+  }
+  response={instance:{state:'open',linkedPhone:'85255550000'}};await f.connections.checkWhatsApp();
+  pendingResponse=()=>new Response('{}',{status:503});
+  await assert.rejects(f.connections.checkWhatsApp(),error=>error.status===502);
+  assert.equal(f.connections.status().whatsapp.status,'error');assert.equal(f.connections.status().whatsapp.linkedPhone,null);
+  await f.connections.clearWhatsApp();assert.equal(f.connections.status().whatsapp.linkedPhone,null);
+});
+
 test('runtime webhook APIs require authenticated same-origin admin; malformed receipt cannot mutate messages', async t => {
   const f = await httpFixture(t);
   assert.equal((await fetch(f.base + '/api/workbench/connections/whatsapp-webhook', { method: 'POST' })).status, 401);

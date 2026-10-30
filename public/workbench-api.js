@@ -15,6 +15,10 @@
     return result;
   }
   surface.csBackend={
+    prepareWhatsAppLocal:()=>api('/connections/whatsapp-local','POST',{consent:true}),
+    getWhatsAppLocal:()=>api('/connections/whatsapp-local'),
+    getWhatsAppQr:()=>api('/connections/whatsapp-qr'),
+    retryWhatsAppAutoReceive:()=>api('/connections/whatsapp-auto-retry','POST',{}),
     async load(){const result=await api('/state');surface.hidden=false;if(login)login.hidden=true;return result;},
     saveProfile:(profile,settings)=>api('/profile','PUT',{profile,settings}),
     train:text=>api('/training','POST',{text}),

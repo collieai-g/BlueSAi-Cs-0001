@@ -1,6 +1,6 @@
 {
   "name": "bluesai-cs-0001",
-  "version": "0.4.0-preview.1",
+  "version": "0.4.0-preview.2",
   "private": true,
   "type": "module",
   "description": "為藍圖工作室設計的內置客服 AI 插件：原生卡片介面、對話訓練與 Evolution API 接駁；目前提供獨立本機實測版",
@@ -15,6 +15,7 @@
     "package:release": "node tools/package-release.js",
     "dev": "node --watch src/index.js",
     "test": "node --test --test-concurrency=1 test/*.test.js integrations/whatsapp-local/bridge.test.js",
-    "check": "node tools/check.js"
+    "check": "node tools/check.js",
+    "feedback:audit": "node tools/feedback-audit.js"
   }
 }

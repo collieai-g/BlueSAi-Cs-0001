@@ -1,6 +1,6 @@
 # 真實 WhatsApp 連結與收發
 
-版本：0.4.0-preview.1。這是客服卡片的實際渠道路線，日常操作見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)。
+版本：0.4.0-preview.2。這是客服卡片的實際渠道路線，日常操作見 [CONNECTION_GUIDE.md](CONNECTION_GUIDE.md)。
 
 ## 兩種實際服務
 
@@ -11,11 +11,13 @@
 
 Baileys 是第三方非官方連結裝置整合，不是 Meta Cloud API。依賴版本、安裝命令、所需設定及限制以該子套件 README 與 lockfile 為準。不能把套件安裝、socket 啟動或二維碼出現當作手機已授權。
 
+WhatsApp 與 WhatsApp Business App 使用本機手機連結流程；Meta Cloud API 是另一種協定路線。卡片不以「Business 尚在開發」概括目前連結能力。總覽電話僅讀取當前 provider 核對的帳戶電話，不展示 JID／LID、session 或憑證；連線燈只表達手機連結，不表示收發、模型或訊息送達已驗收。
+
 ```text
 本人手機掃描真實 QR → 真實 socket／instance open
-指定測試 WhatsApp 號碼 → allowlist → 認證 callback
+明確同意新私人文字收件 → 認證 callback
   → 客服 SQLite 去重及對話 → 卡片內草稿／人工接手
-  → 本人指定測試發送 + 範圍／版本／來源／窗口檢查
+  → 本人另行允許最近來訊回覆 + 範圍／版本／來源／窗口檢查
   → 真實 sendText → accepted → 可對應 delivery/read 回執
   → 測試手機確認實際收到
 ```
@@ -26,11 +28,11 @@ Baileys 是第三方非官方連結裝置整合，不是 Meta Cloud API。依賴
 
 同機服務可以使用 `http://127.0.0.1` callback；電話由 WhatsApp 自身網絡和橋接的出站連線處理，不需要把管理卡片暴露到互聯網。遠端 Evolution 則需要真正可達且受保護的 HTTPS callback，不能使用你的 localhost 當遠端地址。
 
-## 測試範圍及發送
+## 收件範圍及發送
 
-本機測試先選定本人同意的測試號碼，最多三個。空 allowlist 只提供 QR／連線狀態：不把其他客戶的來訊轉送給 Engine／模型，也不對外發送。接駁範圍由私人設定及受限 API 控制，不由 prompt 控制。
+卡片使用本人明確同意的 `all_private_text` 收件流程，另行確認最近 24 小時來訊回覆；未同意前不自動啟用。指定測試號碼表單與切回名單模式的操作不再提供。底層保留的受限測試相容接口不構成卡片新流程，也不能用空名單覆寫現有收件授權。接駁範圍由私人設定及受限 API 控制，不由 prompt 控制。
 
-一般 `DELIVERY_ENABLED` 預設 false。可信橋接模式另外需要 `LOCAL_WHATSAPP_TEST=true`、卡片中選定測試號碼及明確確認後的程序內測試發送；保持 review，重啟後重新核對及確認，不默默沿用啟用狀態。
+一般 `DELIVERY_ENABLED` 預設 false。可信橋接模式另外需要 `LOCAL_WHATSAPP_TEST=true`、本人明確確認的收件與最近來訊回覆範圍；保持 review，重啟後重新核對及確認程序內發送授權，不默默沿用啟用狀態。
 
 首次手動測試不需要模型金鑰。商戶名稱、服務與人工聯絡方式使用本人真實資料；未知欄位保持空白，不能預填虛構政策繞過發送門檻。要測自動 AI，再設定可用模型、有效批准知識及相應回覆模式。
 
@@ -44,8 +46,8 @@ Baileys 是第三方非官方連結裝置整合，不是 Meta Cloud API。依賴
 
 1. 啟動客服執行器及真實橋接／Evolution，登入 `/` 的客服卡片。
 2. 「管理 → 接駁 WhatsApp」取得真實 QR，由本人手機確認及掃碼。已正常連接時從渠道狀態直接核對缺項，不重走完整教學。畫面按實際回應顯示等待、open 或錯誤；QR 過期重新取得。
-3. 核對指定測試號碼、callback 網址、Bearer 驗證及 `MESSAGES_UPSERT`／`MESSAGES_UPDATE` 事件。讀回相符只證明配置，不證明收到訊息。
-4. 由指定另一個 WhatsApp 號碼來訊，在同一卡片內讀回同筆對話。先核對草稿，再依當次授權啟用測試發送，或人工接手回覆。
+3. 核對明確收件／回覆同意、callback 網址、Bearer 驗證及 `MESSAGES_UPSERT`／`MESSAGES_UPDATE` 事件。讀回相符只證明配置，不證明收到訊息。
+4. 由另一個本人擁有或已同意參與測試的 WhatsApp 帳戶來訊，在同一卡片內讀回同筆對話。先核對草稿，再依當次最近來訊回覆授權人工接手回覆。
 5. 收件手機實際核對內容，卡片按對應回執顯示 accepted／delivered／read。沒有收到或結果不明時先核對，不直接重發。
 
 `/diagnostics/console` 僅為獨立診斷，不能作為宿主 Agent 的正式介面。網頁聊天與離線規則的成功不列入這份真實 WhatsApp 手機證據。

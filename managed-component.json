@@ -1,0 +1,7 @@
+{
+  "component_id": "bluesai-cs-0001",
+  "adapter": "bluesai-node",
+  "version": "0.4.0-preview.2",
+  "database_schema": 7,
+  "agent_manifest": "integrations/blueprint/agent.json"
+}

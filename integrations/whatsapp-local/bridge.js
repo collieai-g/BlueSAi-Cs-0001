@@ -73,6 +73,18 @@ function callbackConfig(url,secret) {
   return {enabled:true,url:parsed.href,headers:{Authorization:`Bearer ${secret}`},byEvents:false,base64:false,events:['MESSAGES_UPSERT','MESSAGES_UPDATE']};
 }
 
+// Only the owning local manager supplies this one-use upgrade target, after the
+// owner explicitly starts receiving. A phone-link/startup request supplies none.
+// This never accepts a callback from an HTTP request or changes an existing one.
+function initialCallbackTarget(value,webhookUrl,expectedWebhook) {
+  if(value==='')return null;
+  let target;try{target=new URL(value);}catch{throw new Error('LOCAL_PREVIEW_CALLBACK_UPGRADE_INVALID');}
+  if(typeof value!=='string'||value!==target.href||target.protocol!=='http:'||target.hostname!=='127.0.0.1'||!target.port||
+    !Number.isInteger(Number(target.port))||Number(target.port)<1||Number(target.port)>65535||target.username||target.password||target.search||target.hash||
+    target.pathname!=='/webhooks/evolution'||value!==webhookUrl||expectedWebhook?.url!==value)throw new Error('LOCAL_PREVIEW_CALLBACK_UPGRADE_INVALID');
+  return value;
+}
+
 async function body(req) {
   if(!String(req.headers['content-type']||'').startsWith('application/json'))throw fail('需要 JSON 格式。',415);
   const chunks=[];let size=0;
@@ -82,13 +94,16 @@ async function body(req) {
 
 // The adapter never creates example QR codes or example WhatsApp messages. Tests
 // inject an EventEmitter socket; the CLI supplies the actual Baileys socket.
-export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, webhookUrl='', webhookSecret='', deliveryEnabled=false, allowTestActivation=false, testRecipients=[], makeSocket, loadAuth, encodeQr, logger, fetchImpl=fetch, now=Date.now, qrWaitMs=10000, flushIntervalMs=1000, normalizeJid=normalizedUser, makeMessageId=()=>randomUUID().replaceAll('-','').toUpperCase() }={}) {
+export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, webhookUrl='', webhookSecret='', initialCallbackUpgradeUrl='', requireInboxReconsent=false, preservePreviewInbox=false, deliveryEnabled=false, allowTestActivation=false, testRecipients=[], makeSocket, loadAuth, encodeQr, logger, fetchImpl=fetch, now=Date.now, qrWaitMs=10000, flushIntervalMs=1000, normalizeJid=normalizedUser, makeMessageId=()=>randomUUID().replaceAll('-','').toUpperCase() }={}) {
   if(typeof apiKey!=='string'||apiKey.length<32)throw new Error('WA_LOCAL_API_KEY_TOO_SHORT');
   if(typeof instance!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(instance))throw new Error('INVALID_LOCAL_INSTANCE');
   if([makeSocket,loadAuth,encodeQr].some(fn=>typeof fn!=='function'))throw new Error('REAL_PROVIDER_FACTORY_REQUIRED');
   if(!Number.isInteger(flushIntervalMs)||flushIntervalMs<1||flushIntervalMs>60000)throw new Error('INVALID_CALLBACK_INTERVAL');
+  if(typeof requireInboxReconsent!=='boolean'||(requireInboxReconsent&&deliveryEnabled!==false))throw new Error('LOCAL_PREVIEW_RECONSENT_CONFIGURATION_INVALID');
+  if(typeof preservePreviewInbox!=='boolean'||(preservePreviewInbox&&(!requireInboxReconsent||deliveryEnabled!==false||allowTestActivation)))throw new Error('LOCAL_PREVIEW_INBOX_CONFIGURATION_INVALID');
   dataDir=validateDataDirectory(dataDir);mkdirSync(dataDir,{recursive:true,mode:0o700});
   const expectedWebhook=callbackConfig(webhookUrl,webhookSecret);
+  const upgradeTarget=initialCallbackTarget(initialCallbackUpgradeUrl,webhookUrl,expectedWebhook);
   const db=new DatabaseSync(resolve(dataDir,'bridge.sqlite'));
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS bridge_config(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -98,27 +113,57 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     CREATE TABLE IF NOT EXISTS observed_message_events(event_key TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS self_test_inputs(request_id TEXT NOT NULL,account TEXT NOT NULL,address TEXT NOT NULL,grant_id TEXT NOT NULL,timestamp INTEGER NOT NULL,observed_at INTEGER NOT NULL,PRIMARY KEY(request_id,account,address));
     CREATE TABLE IF NOT EXISTS self_test_operations(operation_id TEXT PRIMARY KEY,account TEXT NOT NULL,address TEXT NOT NULL,grant_id TEXT NOT NULL,request_id TEXT NOT NULL,text_hash TEXT NOT NULL,state TEXT NOT NULL,send_id TEXT NOT NULL,provider_id TEXT,created_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS local_send_aliases(alias_id TEXT PRIMARY KEY,send_id TEXT NOT NULL,address TEXT NOT NULL);`);
-  db.prepare("UPDATE self_test_operations SET state='uncertain' WHERE state='sending'").run();
+    CREATE TABLE IF NOT EXISTS local_send_aliases(alias_id TEXT PRIMARY KEY,send_id TEXT NOT NULL,address TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS local_send_accounts(send_id TEXT PRIMARY KEY,account TEXT NOT NULL);`);
   const config=key=>{const r=db.prepare('SELECT value FROM bridge_config WHERE key=?').get(key);return r?JSON.parse(r.value):null;};
   const setConfig=(key,value)=>db.prepare('INSERT INTO bridge_config VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value));
   const identity={instance,callback:webhookUrl||''};
-  const previous=config('identity');
-  if(previous && JSON.stringify(previous)!==JSON.stringify(identity)){db.close();throw new Error('LOCAL_BRIDGE_IDENTITY_CHANGED_USE_NEW_DATA_DIRECTORY');}
-  if(!previous)setConfig('identity',identity);
+  let identityTransaction=false;
+  try{
+    db.exec('BEGIN IMMEDIATE');identityTransaction=true;
+    const previous=config('identity');
+    if(previous&&JSON.stringify(previous)!==JSON.stringify(identity)){
+      const scope=config('inbox_scope'),savedRecipients=config('recipients');
+      // A link-only preview has no received/sent customer work. Never erase or
+      // re-route another runtime's pending data to make an upgrade succeed.
+      const activeData=['callback_outbox','local_sends','observed_inbox_contacts','observed_message_events','self_test_inputs','self_test_operations','local_send_aliases','local_send_accounts']
+        .some(table=>db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get());
+      if(!upgradeTarget||previous.instance!==instance||previous.callback!==''||config('initial_callback_upgrade')||
+        deliveryEnabled!==false||validateNumbers(testRecipients).length||
+        (savedRecipients!==null&&validateNumbers(savedRecipients).length)||config('webhook_enabled')===true||
+        (scope!==null&&(scope.mode!=='test'||scope.account||scope.consentedAt||scope.includeSelfTests))||activeData)
+        throw new Error('LOCAL_BRIDGE_IDENTITY_CHANGED_USE_NEW_DATA_DIRECTORY');
+      setConfig('recipients',[]);
+      setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null,includeSelfTests:false,selfTestConsentedAt:null});
+      setConfig('webhook_enabled',false);
+      setConfig('initial_callback_upgrade',{from:'',to:upgradeTarget});
+      setConfig('identity',identity);
+    }else if(!previous)setConfig('identity',identity);
+    if(requireInboxReconsent){
+      // The same linked device/data survives a preview restart, but receive and
+      // reply authority does not. Keep pending records quarantined on disk;
+      // the ordinary scope/revocation rules govern a later explicit new grant.
+      if(!preservePreviewInbox)setConfig('recipients',[]);
+      if(!preservePreviewInbox)setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null,includeSelfTests:false,selfTestConsentedAt:null});
+      setConfig('webhook_enabled',false);
+    }
+    db.prepare("UPDATE self_test_operations SET state='uncertain' WHERE state='sending'").run();
+    db.exec('COMMIT');identityTransaction=false;
+  }catch(error){if(identityTransaction)db.exec('ROLLBACK');db.close();throw error;}
   let recipients=validateNumbers(config('recipients')??testRecipients), sendEnabled=deliveryEnabled===true;
   if(!config('recipients'))setConfig('recipients',recipients);
   const savedInboxScope=config('inbox_scope');
   let inboxAccount=typeof savedInboxScope?.account==='string'&&phonePattern.test(savedInboxScope.account)?savedInboxScope.account:null;
   let inboxMode=savedInboxScope?.mode==='all_private_text'&&Number.isSafeInteger(savedInboxScope.consentedAt)&&inboxAccount?'all_private_text':'test',inboxGeneration=0,inboxReplyEnabled=false;
   let inboxConsentedAt=inboxMode==='all_private_text'?savedInboxScope.consentedAt:null;
-  let includeSelfTests=inboxMode==='all_private_text'&&savedInboxScope.includeSelfTests===true&&Number.isSafeInteger(savedInboxScope.selfTestConsentedAt);
+  let includeSelfTests=!preservePreviewInbox&&inboxMode==='all_private_text'&&savedInboxScope.includeSelfTests===true&&Number.isSafeInteger(savedInboxScope.selfTestConsentedAt);
   let selfTestConsentedAt=includeSelfTests?savedInboxScope.selfTestConsentedAt:null;
   let testConsentedAt=Number.isSafeInteger(config('test_consented_at'))?config('test_consented_at'):now();
-  if(savedInboxScope?.mode==='all_private_text'&&inboxMode!=='all_private_text')setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});
+  if(!preservePreviewInbox&&savedInboxScope?.mode==='all_private_text'&&inboxMode!=='all_private_text')setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});
   let webhookEnabled=Boolean(expectedWebhook&&config('webhook_enabled'));
-  let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
+  let state='close',socket=null,linkedAuthState=null,opening=null,stopped=false,epoch=0,qrGeneration=0,qr=null,qrAt=0,lastReason='',retryTimer=null,flushBusy=false,saveChain=Promise.resolve();
   let ignored=0,reconnectAttempt=0,sendsThisMinute=0,sendWindow=now(),mappingState='not_requested',mappingGeneration=0,testChanging=false,scopeChanging=0,scopeBaseline=null;
+  const previewQuarantined=new Set();
   // Reply authority is deliberately process-local. Stored inputs/operations and
   // send IDs survive restart, but none can reopen a grant or retry a send.
   let selfReply=null,selfReplyGeneration=0,selfInFlight=false,selfHeld=[],selfSendsThisMinute=0,selfSendWindow=now();
@@ -128,14 +173,23 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     rejected:{eventType:0,requestId:0,invalidKey:0,stale:0,nonText:0,oversize:0,unmapped:0,outOfScope:0,self:0,knownEcho:0,contextChanged:0,scopeClosed:0},
     queued:{incoming:0,outgoing:0,selfTest:0,duplicate:0,lastAt:null},callbacks:{success:0,failure:0,lastSuccessAt:null,lastFailureAt:null},lastRejection:{reason:null,at:null}};
   const receiveDiagnostics=()=>({...diagnostics,upserts:{...diagnostics.upserts},rejected:{...diagnostics.rejected},queued:{...diagnostics.queued},callbacks:{...diagnostics.callbacks},lastRejection:{...diagnostics.lastRejection}});
+  // Observe only fixed stage categories. Raw node counts are observations, not
+  // proof of successful pairing or refresh handling. No node, auth value or
+  // provider error is copied here, and this never changes the handshake.
+  const linkStages={scope:'process',authMode:'not_started',socketEvents:'not_started',qrEvents:0,pairSuccess:0,companionRegRefresh:0,isNewLogin:0,open:0,
+    closeCodes:{code401:0,code403:0,code408:0,code411:0,code428:0,code440:0,code500:0,code503:0,code515:0,other:0}};
+  const closeStageCodes=new Set([401,403,408,411,428,440,500,503,515]);
+  const incrementStage=(target,key)=>{target[key]=Math.min(Number.MAX_SAFE_INTEGER,target[key]+1);};
+  const connectionDiagnostics=()=>({...linkStages,closeCodes:{...linkStages.closeCodes}});
   function reject(reason,count=1){diagnostics.rejected[reason]+=count;diagnostics.lastRejection={reason,at:now()};}
   const inboxScope=()=>{if(inboxMode==='all_private_text'&&state==='open')inboxAccountValid();return {mode:inboxMode,consented:inboxMode==='all_private_text',includeSelfTests,supported:['new_private_text',...(includeSelfTests?['self_test_text']:[])],excluded:['history','groups','broadcasts',...(includeSelfTests?[]:['self_messages']),'media'],sendingScope:'test_allowlist',replyScope:'recent_incoming_only',replyToReceived:inboxReplyEnabled,deliveryEnabled:inboxReplyEnabled};};
-  const status=()=>({instance:{instanceName:instance,state},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics()});
+  const status=()=>({instance:{instanceName:instance,state,linkedPhone:state==='open'&&socket?resolveLinkedPhone(socket,linkedAuthState,normalizeJid):null},provider:'baileys-local',qrAvailable:Boolean(qr&&now()-qrAt<20000),qrExpiresInMs:qr?Math.max(0,20000-(now()-qrAt)):0,lastReason,inboxScope:inboxScope(),selfTestReply:selfReplyStatus(),testMode:{count:recipients.length,maskedNumbers:recipients.map(number=>'••••'+number.slice(-4)),deliveryEnabled:sendEnabled,activationAvailable:allowTestActivation,mappingState},webhook:{configured:Boolean(expectedWebhook),enabled:webhookEnabled,pending:db.prepare('SELECT count(*) AS n FROM callback_outbox').get().n},ignoredOutsideTestScope:ignored,receiveDiagnostics:receiveDiagnostics(),connectionDiagnostics:connectionDiagnostics()});
   const scoped=address=>recipients.includes(address.split('@')[0]);
   const inboundScoped=address=>phoneJid.test(address)&&(inboxMode==='all_private_text'?inboxAccountValid():scoped(address));
   function inboxAccountValid(){
     if(inboxMode!=='all_private_text'||state!=='open')return false;
     if(inboxAccount&&resolveLinkedPhone(socket,linkedAuthState,normalizeJid)===inboxAccount)return true;
+    if(preservePreviewInbox){closeSelfReply();sendEnabled=false;inboxReplyEnabled=false;lastReason='inbox_account_changed';return false;}
     closeSelfReply();inboxMode='test';inboxAccount=null;inboxConsentedAt=null;includeSelfTests=false;selfTestConsentedAt=null;scopeBaseline=null;inboxGeneration++;mappingGeneration++;sendEnabled=false;inboxReplyEnabled=false;
     setConfig('inbox_scope',{mode:'test',consentedAt:null,account:null});lastReason='inbox_account_changed';purgeOutOfScope();
     return false;
@@ -145,7 +199,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     // A callback already waiting for the core must not carry obsolete authority.
     for(const row of db.prepare('SELECT id,payload FROM callback_outbox').all()){
       let payload;try{payload=JSON.parse(row.payload);}catch{continue;}
-      if(payload.data?.localSelfTest===true&&payload.data.selfReplyGrantId){payload.data.selfReplyGrantId=null;db.prepare('UPDATE callback_outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),row.id);}
+      if(payload?.data?.localSelfTest===true&&payload.data.selfReplyGrantId){payload.data.selfReplyGrantId=null;db.prepare('UPDATE callback_outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),row.id);}
     }
   }
   function selfReplyValid(){
@@ -264,14 +318,20 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     try {
       // Drain a bounded batch so a burst does not wait one second per message.
       for(let batch=0;batch<25&&!stopped&&webhookEnabled&&!scopeChanging;batch++){
-        const row=db.prepare('SELECT * FROM callback_outbox WHERE next_at<=? ORDER BY created_at LIMIT 1').get(now());
+        let row;
+        for(const candidate of db.prepare('SELECT * FROM callback_outbox WHERE next_at<=? ORDER BY created_at').iterate(now())){
+          if(!preservePreviewInbox||!previewQuarantined.has(candidate.id)){row=candidate;break;}
+        }
         if(!row)return;
         // Revoked queued bodies must never be forwarded on a later retry.
-        const payload=JSON.parse(row.payload);
+        let payload;try{payload=JSON.parse(row.payload);}catch(error){if(preservePreviewInbox){previewQuarantined.add(row.id);continue;}throw error;}
+        if(preservePreviewInbox&&!object(payload)){previewQuarantined.add(row.id);continue;}
+        if(preservePreviewInbox&&payload.sourceScope!=='all_private_text'){previewQuarantined.add(row.id);continue;}
         // Preserve consented queued bodies during a normal offline restart, but
         // do not forward any until the linked account has actually reopened.
         if(payload.sourceScope==='all_private_text'&&inboxMode==='all_private_text'&&state!=='open')return;
-        if(!allowedCallback(payload)){db.prepare('DELETE FROM callback_outbox WHERE id=?').run(row.id);continue;}
+        if(preservePreviewInbox&&payload.sourceScope==='all_private_text'&&!inboxAccountValid())return;
+        if(!allowedCallback(payload)){if(preservePreviewInbox){previewQuarantined.add(row.id);continue;}db.prepare('DELETE FROM callback_outbox WHERE id=?').run(row.id);continue;}
         try {
           const response=await fetchImpl(expectedWebhook.url,{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),headers:{...expectedWebhook.headers,'Content-Type':'application/json'},body:row.payload});
           if(!response.ok)throw Error();
@@ -330,7 +390,19 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
   }
   async function onUpdates(updates,expectedEpoch) {
     if(!Array.isArray(updates))return;
-    for(const item of updates){const known=findLocalSend(item.key?.id);if(item.key?.fromMe!==true&&!(item.key?.fromMe===false&&known?.selfReply))continue;const address=await phoneAddress(item.key,{knownSend:true}),id=item.key?.id,status=statusNames[item.update?.status];if(stopped||expectedEpoch!==epoch)return;if(!address||typeof id!=='string'||!id||!status)continue;const sent=findLocalSend(id);if(!scoped(address)&&sent?.address!==address)continue;queue('messages.update',`receipt:${id}:${status}`,{keyId:id,remoteJid:address,fromMe:true,status,...(sent?.selfReply?{localSelfReply:true}:{})});}
+    for(const item of updates){
+      const known=findLocalSend(item.key?.id);if(item.key?.fromMe!==true&&!(item.key?.fromMe===false&&known?.selfReply))continue;
+      const address=await phoneAddress(item.key,{knownSend:true}),id=item.key?.id,status=statusNames[item.update?.status];
+      if(stopped||expectedEpoch!==epoch)return;if(!address||typeof id!=='string'||!id||!status)continue;
+      const sent=findLocalSend(id);if(!scoped(address)&&sent?.address!==address)continue;
+      let sourceScope;
+      if(preservePreviewInbox){
+        const own=sent&&db.prepare('SELECT account FROM local_send_accounts WHERE send_id=?').get(sent.id);
+        if(!own||!inboxAccountValid()||own.account!==inboxAccount)continue;
+        sourceScope='all_private_text';
+      }
+      queue('messages.update',`receipt:${id}:${status}`,{keyId:id,remoteJid:address,fromMe:true,status,...(sent?.selfReply?{localSelfReply:true}:{})},sourceScope);
+    }
   }
   function onReceipt(updates,expectedEpoch) {
     if(!Array.isArray(updates))return;
@@ -343,32 +415,49 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
     opening=(async()=>{
       let saved;do{saved=saveChain;await saved;}while(saved!==saveChain);
       if(stopped)throw fail('接駁服務已停止。',503);
-      const current=++epoch;state='connecting';lastReason='';
+      const current=++epoch;state='connecting';lastReason='';qrGeneration++;qr=null;qrAt=0;
       const auth=await loadAuth(resolve(dataDir,'auth'));
       if(stopped||current!==epoch)throw fail('接駁服務已停止。',503);
       linkedAuthState=auth.state;
+      linkStages.authMode=auth.state.creds.me==null?'new_registration':'existing_login';
+      linkStages.socketEvents='unavailable';
       // The SDK applies this raw-node filter before cleanMessage canonicalizes
       // hosted private addresses. Let only its recognized private hosted forms
       // reach that canonicalizer; final forwarding still requires verified PN.
       const candidate=makeSocket({auth:auth.state,logger,markOnlineOnConnect:false,syncFullHistory:false,shouldSyncHistoryMessage:()=>false,shouldIgnoreJid:jid=>{const value=normalizeJid(jid);return !phoneJid.test(value)&&!/^\d+@lid$/.test(value)&&!/^([1-9]\d{7,14})@hosted$/.test(value)&&!/^\d+@hosted\.lid$/.test(value);},getMessage:async()=>undefined});
       socket=candidate;
+      if(typeof candidate.ws?.on==='function'){
+        linkStages.socketEvents='available';
+        const observeStage=key=>()=>{if(current===epoch&&!stopped&&socket===candidate)incrementStage(linkStages,key);};
+        candidate.ws.on('CB:iq,,pair-success',observeStage('pairSuccess'));
+        candidate.ws.on('CB:notification,type:companion_reg_refresh',observeStage('companionRegRefresh'));
+      }
       candidate.ev.on('creds.update',()=>{if(current!==epoch||stopped)return;saveChain=saveChain.then(()=>auth.saveCreds()).catch(()=>{if(current!==epoch||stopped)return;closeSelfReply();lastReason='credential_save_failed';state='close';sendEnabled=false;inboxReplyEnabled=false;candidate.end(new Error('credential_save_failed'));});});
       candidate.ev.on('messages.upsert',event=>{if(current===epoch&&!stopped)onMessages(event,current).catch(()=>{lastReason='incoming_mapping_failed';});});
       candidate.ev.on('messages.update',event=>{if(current===epoch&&!stopped)onUpdates(event,current).catch(()=>{lastReason='receipt_mapping_failed';});});
       candidate.ev.on('message-receipt.update',event=>{if(current===epoch&&!stopped)onReceipt(event,current)?.catch(()=>{lastReason='receipt_mapping_failed';});});
       candidate.ev.on('connection.update',update=>{
-        if(current!==epoch||stopped)return;
-        if(typeof update.qr==='string'){
-          const raw=update.qr;
-          encodeQr(raw).then(image=>{if(current===epoch&&!stopped&&state==='connecting'){qr=image;qrAt=now();}}).catch(()=>{lastReason='qr_encoding_failed';});
+        if(current!==epoch||stopped||socket!==candidate)return;
+        if(socket===candidate){
+          if(typeof update.qr==='string')incrementStage(linkStages,'qrEvents');
+          if(update.isNewLogin===true)incrementStage(linkStages,'isNewLogin');
+          if(update.connection==='open')incrementStage(linkStages,'open');
+          if(update.connection==='close'){
+            const code=update.lastDisconnect?.error?.output?.statusCode;
+            incrementStage(linkStages.closeCodes,typeof code==='number'&&closeStageCodes.has(code)?'code'+code:'other');
+          }
         }
-        if(update.connection==='open'){state='open';qr=null;qrAt=0;reconnectAttempt=0;if(inboxMode==='all_private_text')inboxAccountValid();if(recipients.length)prepareMappings(recipients).catch(error=>{if(error.stale||current!==epoch||stopped||state!=='open'||socket!==candidate)return;sendEnabled=false;lastReason='recipient_mapping_unresolved';});}
+        if(typeof update.qr==='string'){
+          const raw=update.qr,generation=++qrGeneration;qr=null;qrAt=0;
+          encodeQr(raw).then(image=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting'){qr=image;qrAt=now();}}).catch(()=>{if(current===epoch&&generation===qrGeneration&&!stopped&&state==='connecting')lastReason='qr_encoding_failed';});
+        }
+        if(update.connection==='open'){state='open';qrGeneration++;qr=null;qrAt=0;lastReason='';reconnectAttempt=0;if(inboxMode==='all_private_text')inboxAccountValid();if(recipients.length)prepareMappings(recipients).catch(error=>{if(error.stale||current!==epoch||stopped||state!=='open'||socket!==candidate)return;sendEnabled=false;lastReason='recipient_mapping_unresolved';});}
         if(update.connection==='close'){
-          closeSelfReply();state='close';qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
+          closeSelfReply();state='close';qrGeneration++;qr=null;qrAt=0;socket=null;sendEnabled=false;inboxReplyEnabled=false;
           const code=update.lastDisconnect?.error?.output?.statusCode;
           lastReason=code===401?'logged_out':code===403?'account_not_available':'connection_closed';
           if([401,403].includes(code)){sendEnabled=false;return;}
-          if(!stopped&&reconnectAttempt<5){const delay=code===515?500:Math.min(30000,1000*2**reconnectAttempt++);retryTimer=setTimeout(()=>connect().catch(()=>{lastReason='reconnect_failed';state='close';}),delay);retryTimer.unref();}
+          if(!stopped&&reconnectAttempt<5){const attempt=reconnectAttempt++,delay=code===515?500:Math.min(30000,1000*2**attempt);retryTimer=setTimeout(()=>connect().catch(()=>{lastReason='reconnect_failed';state='close';}),delay);retryTimer.unref();}
         }
       });
     })().catch(()=>{state='close';socket=null;lastReason='connection_start_failed';throw fail('WhatsApp 連線未能啟動，請核對網絡及已連結裝置。',502);}).finally(()=>{opening=null;});
@@ -382,6 +471,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(req.method==='GET'&&path==='/healthz')return json(res,200,{status:'ok',provider:'baileys-local'});
       if(!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!equal(req.headers.apikey,apiKey))throw fail('未獲授權。',401);
       if(path===`/instance/connectionState/${instance}`&&req.method==='GET')return json(res,200,status());
+      if(path===`/instance/qr/${instance}`&&req.method==='GET')return json(res,200,{...status(),base64:state==='connecting'&&qr&&now()-qrAt<20000?qr:null});
       if(path===`/instance/selfTestReply/${instance}`){
         if(req.method==='GET')return json(res,200,selfReplyStatus());
         if(req.method==='PUT'){
@@ -401,9 +491,28 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         while(state==='connecting'&&!(qr&&now()-qrAt<20000)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));
         return json(res,200,{...status(),base64:qr&&now()-qrAt<20000?qr:null});
       }
+      if(path===`/instance/previewInbox/${instance}`&&req.method==='PUT'){
+        if(!preservePreviewInbox)throw fail('此接駁沒有本機自動收件能力。',409);
+        const input=await body(req);
+        if(!object(input)||Object.keys(input).some(key=>key!=='enable')||input.enable!==true||!expectedWebhook||!webhookEnabled||stopped||state!=='open')throw fail('本機收件尚未就緒。',409);
+        const account=resolveLinkedPhone(socket,linkedAuthState,normalizeJid);
+        if(!account)throw fail('尚未核對已連結帳戶身份。',409);
+        const saved=config('inbox_scope');
+        if(saved?.mode==='all_private_text'&&(!phonePattern.test(saved.account||'')||saved.account!==account||!Number.isSafeInteger(saved.consentedAt)))throw fail('已連結帳戶與原收件帳戶不相符。',409);
+        if(saved!==null&&saved?.mode!=='all_private_text'&&(!object(saved)||saved.mode!=='test'||saved.account!=null||saved.consentedAt!=null||saved.includeSelfTests===true||saved.selfTestConsentedAt!=null))throw fail('原收件帳戶範圍未能安全核對。',409);
+        if(saved?.mode!=='all_private_text'&&db.prepare('SELECT 1 FROM callback_outbox LIMIT 1').get())throw fail('原待轉送訊息缺少可核對的帳戶範圍。',409);
+        inboxMode='all_private_text';inboxAccount=account;
+        inboxConsentedAt=saved?.mode==='all_private_text'?saved.consentedAt:now();
+        includeSelfTests=false;selfTestConsentedAt=null;inboxGeneration++;mappingGeneration++;previewQuarantined.clear();
+        setConfig('inbox_scope',saved?.mode==='all_private_text'?{...saved,mode:inboxMode,consentedAt:inboxConsentedAt,account}:{mode:inboxMode,consentedAt:inboxConsentedAt,account,includeSelfTests:false,selfTestConsentedAt:null});
+        // The core still needs an individual human send grant for every message.
+        inboxReplyEnabled=true;
+        return json(res,200,inboxScope());
+      }
       if(path===`/instance/inboxScope/${instance}`){
         if(req.method==='GET')return json(res,200,inboxScope());
         if(req.method==='PUT'){
+          if(preservePreviewInbox)throw fail('本機自動收件不使用此範圍設定。',409);
           closeSelfReply();
           const previousConsent=scopeChanging?scopeBaseline:inboxMode==='all_private_text'&&inboxAccountValid()?{account:inboxAccount,at:inboxConsentedAt,includeSelfTests,selfTestConsentedAt}:null;
           if(!scopeChanging)scopeBaseline=previousConsent;
@@ -440,6 +549,7 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
       if(path===`/instance/testRecipients/${instance}`){
         if(req.method==='GET')return json(res,200,status().testMode);
         if(req.method==='PUT'){
+          if(preservePreviewInbox)throw fail('本機自動收件不使用測試號碼設定。',409);
           closeSelfReply();
           // "Only these test phones" revokes broad reception as well as sending,
           // including malformed/failed writes and concurrent reconfiguration.
@@ -478,8 +588,23 @@ export function createLocalBridge({ dataDir, instance='bluesai-local', apiKey, w
         if(typeof text!=='string'||!text.trim()||text.length>4000||input.linkPreview!==false)throw fail('只支援最多 4000 字的純文字測試。');
         if(now()-sendWindow>=60000){sendWindow=now();sendsThisMinute=0;}if(sendsThisMinute>=20)throw fail('測試訊息太頻密，請稍後再試。',429);sendsThisMinute++;
         const id=makeMessageId();
-        db.prepare('INSERT INTO local_sends VALUES (?,?,?,?)').run(id,address,'sending',now());
-        try{const result=await socket.sendMessage(address,{text:text.trim(),linkPreview:null},{messageId:id});if(typeof result?.key?.id!=='string'||!result.key.id)throw Error();db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('accepted',id);return json(res,201,{key:{id:result.key.id},status:'accepted'});}catch{db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('uncertain',id);throw fail('發送結果未確認，請先在 WhatsApp 核對，勿直接重發。',502);}
+        db.exec('BEGIN IMMEDIATE');
+        try{
+          db.prepare('INSERT INTO local_sends VALUES (?,?,?,?)').run(id,address,'sending',now());
+          if(preservePreviewInbox){if(!inboxAccountValid())throw Error('PREVIEW_ACCOUNT_CHANGED');db.prepare('INSERT INTO local_send_accounts VALUES (?,?)').run(id,inboxAccount);}
+          db.exec('COMMIT');
+        }catch(error){db.exec('ROLLBACK');throw error;}
+        try{
+          const result=await socket.sendMessage(address,{text:text.trim(),linkPreview:null},{messageId:id}),actual=result?.key?.id;
+          if(typeof actual!=='string'||!actual||actual.length>300)throw Error();
+          if(preservePreviewInbox&&actual!==id){
+            const known=findLocalSend(actual);if(known&&known.id!==id)throw Error('PREVIEW_SEND_ALIAS_CONFLICT');
+            db.prepare('INSERT OR IGNORE INTO local_send_aliases VALUES (?,?,?)').run(actual,id,address);
+            const alias=db.prepare('SELECT send_id,address FROM local_send_aliases WHERE alias_id=?').get(actual);
+            if(!alias||alias.send_id!==id||alias.address!==address)throw Error('PREVIEW_SEND_ALIAS_CONFLICT');
+          }
+          db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('accepted',id);return json(res,201,{key:{id:actual},status:'accepted'});
+        }catch{db.prepare('UPDATE local_sends SET state=? WHERE id=?').run('uncertain',id);throw fail('發送結果未確認，請先在 WhatsApp 核對，勿直接重發。',502);}
       }
       if(path===`/message/sendSelfTest/${instance}`&&req.method==='POST'){
         const input=await body(req);

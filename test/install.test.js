@@ -84,16 +84,26 @@ test('journal refuses permission bypass, credentials, unsupported preflight and 
 });
 
 function hostClient() {
-  let record=null,posts=0,patches=0;
+  let record=null,posts=0,patches=0;const upgrades=new Map(),requests=[];
   const identity={target_id:fixture.target_id,role:'owner'};
   const request=async(method,path,input)=>{
+    requests.push({method,path,input:structuredClone(input)});
     if(method==='GET'&&path.startsWith('/api/studio/agents?'))return {agents:record?[{id:record.id,manifest:{id:record.manifest.id}}]:[],total:record?1:0};
     if(method==='GET'&&record&&path.endsWith('/'+record.id))return {agent:structuredClone(record)};
     if(method==='POST') {posts++;record={id:'same-agent',version:1,manifest:structuredClone(input.manifest),source:structuredClone(input.source),settings:{merchant_name:'',reply_tone:'friendly',...input.settings},connection_state:'added'};return {agent:structuredClone(record)};}
-    if(method==='PATCH') {if(input.expected_version!==record.version)throw Object.assign(new Error('conflict'),{status:409});patches++;record={...record,settings:input.settings,version:record.version+1};return {agent:structuredClone(record)};}
+    if(method==='PATCH') {
+      if(input.manifest) {
+        const intent=digest({manifest:input.manifest,source:input.source,settings:input.settings||{}}),receipt=upgrades.get(input.upgrade_key);
+        if(receipt){if(receipt.intent!==intent)throw Object.assign(new Error('conflict'),{code:'UPGRADE_KEY_CONFLICT',status:409});return {agent:structuredClone(receipt.agent)};}
+        if(input.expected_version!==record.version)throw Object.assign(new Error('conflict'),{status:409});
+        patches++;record={...record,manifest:structuredClone(input.manifest),source:structuredClone(input.source),settings:{...record.settings,...input.settings},version:record.version+1};
+        upgrades.set(input.upgrade_key,{intent,agent:structuredClone(record)});return {agent:structuredClone(record)};
+      }
+      if(input.expected_version!==record.version)throw Object.assign(new Error('conflict'),{status:409});patches++;record={...record,settings:input.settings,version:record.version+1};return {agent:structuredClone(record)};
+    }
     throw new Error('unexpected request');
   };
-  return {request,getTargetIdentity:async()=>structuredClone(identity),identity,get record(){return record;},get posts(){return posts;},get patches(){return patches;}};
+  return {request,getTargetIdentity:async()=>structuredClone(identity),identity,requests,get record(){return record;},get posts(){return posts;},get patches(){return patches;}};
 }
 test('valid native manifest registers once; repeat reuses same ID with blank optional merchant data',async()=>{
   const host=hostClient(),installer=createBlueprintInstaller({request:host.request,getTargetIdentity:host.getTargetIdentity});
@@ -130,6 +140,98 @@ test('registration readback must match independent requested settings even if se
   const installer=createBlueprintInstaller({request:host.request,getTargetIdentity:host.getTargetIdentity});
   const normalized=await installer.ensure({...input,settings:{merchant_name:'  Requested merchant  '}});assert.equal(normalized.settings.merchant_name,'Requested merchant');
   await assert.rejects(installer.ensure({...input,settings:{unknown_setting:true}}),{code:'INVALID_AGENT_SETTINGS'});
+});
+async function upgradeFixture() {
+  const host=hostClient(),installer=createBlueprintInstaller({request:host.request,getTargetIdentity:host.getTargetIdentity});
+  await installer.ensure({source,inspection:inspect(),settings:{merchant_name:'Synthetic merchant'}});
+  host.record.manifest.version='0.3.0';host.record.source.revision='b'.repeat(40);
+  host.record.enabled=false;host.record.connection_state='connected';host.record.history=[{id:'synthetic-job',source:structuredClone(host.record.source)}];
+  return {host,installer,input:{source,inspection:inspect(),expected_agent_id:'same-agent',upgrade_key:'synthetic-upgrade-1'}};
+}
+test('explicit package upgrade keeps the same Agent, retained settings and state, and retries the same intent once',async()=>{
+  const {host,installer,input}=await upgradeFixture(),history=structuredClone(host.record.history);
+  const requested={...input,settings:{reply_tone:'formal'}};
+  const one=await installer.ensure(requested),two=await installer.ensure(requested);
+  assert.equal(one.agent_id,'same-agent');assert.equal(two.agent_id,'same-agent');assert.equal(host.posts,1);assert.equal(host.patches,1);
+  assert.equal(two.settings.merchant_name,'Synthetic merchant');assert.equal(two.settings.reply_tone,'formal');
+  assert.equal(host.record.enabled,false);assert.equal(two.connection_state,'connected');assert.deepEqual(host.record.history,history);
+  const patches=host.requests.filter(row=>row.method==='PATCH');assert.equal(patches.length,2);
+  for(const {input:patch} of patches){assert.equal(patch.upgrade_key,input.upgrade_key);assert.deepEqual(patch.settings,{reply_tone:'formal'});assert.equal(Object.hasOwn(patch,'enabled'),false);}
+});
+test('explicit upgrade requires both target and key and never creates a missing or different target',async()=>{
+  const host=hostClient(),installer=createBlueprintInstaller({request:host.request,getTargetIdentity:host.getTargetIdentity}),input={source,inspection:inspect()};
+  for(const options of [{expected_agent_id:'same-agent'},{upgrade_key:'key'},{expected_agent_id:'same-agent',upgrade_key:'not a key'}])await assert.rejects(installer.ensure({...input,...options}),{code:'EXPLICIT_UPGRADE_TARGET_AND_KEY_REQUIRED'});
+  await assert.rejects(installer.ensure({...input,expected_agent_id:'same-agent',upgrade_key:'key'}),{code:'EXPECTED_AGENT_NOT_FOUND'});assert.equal(host.posts,0);
+  const ready=await upgradeFixture();
+  await assert.rejects(ready.installer.ensure({...ready.input,expected_agent_id:'different-agent'}),{code:'EXPECTED_AGENT_MISMATCH'});assert.equal(ready.host.patches,0);assert.equal(ready.host.posts,1);
+  const multiple=createBlueprintInstaller({getTargetIdentity:ready.host.getTargetIdentity,request:(method,path,data)=>path.includes('?')?{agents:[{id:'same-agent',manifest:{id:manifest.id}},{id:'second',manifest:{id:manifest.id}}],total:2}:ready.host.request(method,path,data)});
+  await assert.rejects(multiple.ensure(ready.input),{code:'MULTIPLE_EXISTING_INSTANCES'});assert.equal(ready.host.patches,0);
+});
+test('upgrade rejects incompatible retained settings and source identity before mutating the host',async()=>{
+  for(const mutate of [record=>record.manifest.settings[0].type='textarea',record=>record.settings.removed_setting='synthetic',record=>record.settings.reply_tone='unsupported']){
+    const {host,installer,input}=await upgradeFixture();mutate(host.record);
+    await assert.rejects(installer.ensure(input),{code:'INCOMPATIBLE_UPGRADE_SETTINGS'});assert.equal(host.patches,0);
+  }
+  const foreign=await upgradeFixture();foreign.host.record.source.repository='https://example.test/another/source';
+  await assert.rejects(foreign.installer.ensure(foreign.input),{code:'SOURCE_REPOSITORY_MISMATCH'});assert.equal(foreign.host.patches,0);
+  const changedPin=await upgradeFixture();changedPin.host.record.source.revision=source.revision;
+  await assert.rejects(changedPin.installer.ensure(changedPin.input),{code:'MANIFEST_CONTENT_MISMATCH'});assert.equal(changedPin.host.patches,0);
+});
+test('upgrade permits explicit valid replacement of a retired option and removal of an unstored optional declaration',async()=>{
+  const {host,installer,input}=await upgradeFixture();
+  host.record.settings.reply_tone='retired-option';host.record.manifest.settings[1].options.push({value:'retired-option',label:'Synthetic retired option'});
+  host.record.manifest.settings.push({key:'old_optional',label:'Synthetic old option',type:'text',required:false,default:''});
+  const result=await installer.ensure({...input,settings:{reply_tone:'formal'}});
+  assert.equal(result.settings.reply_tone,'formal');assert.equal(result.settings.merchant_name,'Synthetic merchant');assert.equal(host.patches,1);
+  const invalid=await upgradeFixture();
+  await assert.rejects(invalid.installer.ensure({...invalid.input,settings:{reply_tone:'invalid-option'}}),{code:'INVALID_AGENT_SETTINGS'});assert.equal(invalid.host.patches,0);
+});
+test('registration and upgrade never follow a substituted response ID',async()=>{
+  for(const responseStage of ['detail','patch']){
+    const {host,input}=await upgradeFixture();
+    const installer=createBlueprintInstaller({getTargetIdentity:host.getTargetIdentity,request:async(method,path,data)=>{
+      const result=await host.request(method,path,data);
+      if((responseStage==='detail'&&method==='GET'&&!path.includes('?'))||(responseStage==='patch'&&method==='PATCH'))result.agent.id='replacement-agent';
+      return result;
+    }});
+    await assert.rejects(installer.ensure(input),{code:'REGISTRATION_READBACK_MISMATCH'});
+    assert.equal(host.requests.some(row=>row.path.endsWith('/replacement-agent')),false);assert.equal(host.posts,1);
+  }
+  const {host}=await upgradeFixture();host.record.manifest=structuredClone(manifest);host.record.source=structuredClone(source);
+  const replaced=createBlueprintInstaller({getTargetIdentity:host.getTargetIdentity,request:async(method,path,data)=>{const result=await host.request(method,path,data);if(method==='PATCH')result.agent.id='replacement-agent';return result;}});
+  await assert.rejects(replaced.ensure({source,inspection:inspect(),settings:{reply_tone:'formal'}}),{code:'REGISTRATION_READBACK_MISMATCH'});
+  assert.equal(host.requests.some(row=>row.path.endsWith('/replacement-agent')),false);
+});
+test('unsupported or ignored package PATCH fails closed without fallback creation',async()=>{
+  for(const mode of ['reject','ignore']){
+    const {host,input}=await upgradeFixture();
+    const installer=createBlueprintInstaller({getTargetIdentity:host.getTargetIdentity,request:(method,path,data)=>{
+      if(method==='PATCH'){if(mode==='reject')throw Object.assign(new Error('unsupported upgrade'),{code:'UNSUPPORTED_HOST_UPGRADE',status:400});return host.request('GET',path);}
+      return host.request(method,path,data);
+    }});
+    await assert.rejects(installer.ensure(input),{code:mode==='reject'?'UNSUPPORTED_HOST_UPGRADE':'REGISTRATION_READBACK_MISMATCH'});
+    assert.equal(host.posts,1);assert.equal(host.patches,0);
+  }
+});
+test('unknown upgrade outcome is not blindly resent; explicit retry keeps the key and checks current state',async()=>{
+  const {host,input}=await upgradeFixture();let loseResponse=true;
+  const installer=createBlueprintInstaller({getTargetIdentity:host.getTargetIdentity,request:async(method,path,data)=>{
+    const result=await host.request(method,path,data);
+    if(method==='PATCH'&&loseResponse){loseResponse=false;throw Object.assign(new Error('synthetic transport failure'),{code:'TRANSPORT_UNKNOWN'});}
+    return result;
+  }});
+  await assert.rejects(installer.ensure(input),{code:'TRANSPORT_UNKNOWN'});assert.equal(host.patches,1);assert.equal(host.requests.filter(row=>row.method==='PATCH').length,1);
+  assert.equal((await installer.ensure(input)).agent_id,'same-agent');assert.equal(host.patches,1);
+  await assert.rejects(installer.ensure({...input,settings:{reply_tone:'formal'}}),{code:'UPGRADE_KEY_CONFLICT'});assert.equal(host.patches,1);
+  const drifted=createBlueprintInstaller({getTargetIdentity:host.getTargetIdentity,request:async(method,path,data)=>{const result=await host.request(method,path,data);if(method==='PATCH')host.record.source.revision='c'.repeat(40);return result;}});
+  await assert.rejects(drifted.ensure(input),{code:'REGISTRATION_READBACK_MISMATCH'});assert.equal(host.patches,1);
+});
+test('upgrade rechecks the authenticated target and role before write and current readback',async()=>{
+  for(const switchAt of [2,3]){
+    const {host,input}=await upgradeFixture();let calls=0;
+    const installer=createBlueprintInstaller({request:host.request,getTargetIdentity:async()=>({target_id:fixture.target_id,role:++calls===switchAt?'viewer':'owner'})});
+    await assert.rejects(installer.ensure(input),{code:'ADMIN_REQUIRED'});assert.equal(host.patches,switchAt===2?0:1);assert.equal(host.posts,1);
+  }
 });
 test('manifest matches pinned connected_client contract and contains no credentials or executable renderer',()=>{
   assert.deepEqual(Object.keys(manifest).sort(),['adapter','contract_version','description','id','instructions','name','operations','settings','ui','version'].sort());
@@ -175,6 +277,29 @@ test('public source, blank environment examples and ordinary synthetic fixtures 
   const result=f.run(f.output);assert.equal(result.status,0,result.stderr);
   const release=JSON.parse(readFileSync(resolve(f.output,'release.json'),'utf8'));
   assert.ok(release.inventory.some(row=>row.path==='src/knowledge-learning.js'));assert.ok(release.inventory.some(row=>row.path==='.env.example'));
+});
+
+test('release archive preserves Git blob bytes under a CRLF checkout policy',t=>{
+  const {repo,output,git,run}=packageFixture(t);
+  git('config','core.autocrlf','true');
+  const result=run(output);assert.equal(result.status,0,result.stderr);
+  const release=JSON.parse(readFileSync(resolve(output,'release.json'),'utf8'));
+  const tar=readFileSync(resolve(output,'source.tar')),entries=new Map();
+  for(let offset=0;offset+512<=tar.length;){
+    const header=tar.subarray(offset,offset+512);
+    if(header.every(byte=>byte===0))break;
+    const name=header.subarray(0,100).toString().replace(/\0.*$/s,'');
+    const size=parseInt(header.subarray(124,136).toString().replace(/\0.*$/s,'').trim()||'0',8);
+    const prefix=header.subarray(345,500).toString().replace(/\0.*$/s,'');
+    if(header[156]===0||header[156]===48)entries.set(prefix?prefix+'/'+name:name,tar.subarray(offset+512,offset+512+size));
+    offset+=512+Math.ceil(size/512)*512;
+  }
+  for(const file of release.inventory){
+    assert.ok(entries.has(file.path),file.path);
+    assert.equal(createHash('sha256').update(entries.get(file.path)).digest('hex'),file.sha256,file.path);
+  }
+  assert.equal(entries.get('sample.txt').toString(),'synthetic source\n');
+  assert.equal(git('config','core.autocrlf'),'true');
 });
 
 test('tracked private runtime and customer-export paths block release before any artifact directory exists',t=>{

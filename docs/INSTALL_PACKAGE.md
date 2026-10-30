@@ -2,16 +2,17 @@
 
 單一卡片及宿主內容保護以 [AGENT_UI_CONTRACT.md](AGENT_UI_CONTRACT.md) 為準。卡片只使用 `/api/agents/bluesai-cs-0001`；不得把客服整頁、全域 API 或資料表覆蓋到宿主的總覽、工作及資料。
 
-本版是 `0.4.0-preview.1` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
+本版是 `0.4.0-preview.2` 預覽套件。產品顯示身份仍為 `BlueSAi-Cs-#0001`；宿主 manifest 的合法 ID 為 `bluesai-cs-0001`。公開套件位於 `integrations/blueprint/`，不包含私人工作室身份、商戶資料、憑證或備份。
 
 ## 新安裝與升級的資料契約
 
 公開來源及 source.tar 只包含可重用程式、文件、去私人化設定範本及合成測試資料。商戶知識／學習資料庫、對話、帳戶記錄、WhatsApp 真實來源／登入、手機身份、部署設定、日誌及備份不得打包；正式安裝 evidence／journal 也留在私人目錄。
 
 - **fresh：新工作室或新商戶。** 核對新目標的已驗證身份，以空白 manifest 商戶設定開始，另設未使用的倉庫外核心與橋接私人目錄、獨立 runtime／origin／instance、憑證及 callback。由本人重新連結該工作室的渠道，重新核對模型及明確授權；不複製舊 SQLite、知識匯出、帳戶紀錄、環境檔或 auth。卡片不能指向舊本機核心、共用預設目錄或另一工作室渠道。讀回資料空白及新 runtime 的正確綁定後才進行功能測試。
-- **upgrade：同一已驗證工作室。** 重用原 Agent ID、私人資料目錄及渠道登入；本次已有升級工作才接續其 operation_id，新的來源／計劃另建升級工作。先備份／驗證還原，再用固定新版來源及增量 schema，保留知識、對話、批准及未完成狀態；不要每次清空資料或重新連結手機。重啟後的程序內 grant／發送授權按實際狀態重新確認，未知結果不重送。
+- **開發預覽：來源修正的隔離驗證。** 使用指定候選與 Git 外合成資料，不借用原工作室的資料、登入或渠道。預覽可驗證新版來源，但不能替代指定原工作室的更新及資料保留驗收；未提交來源不得偽造遠端 pin 進入正式登記。
+- **upgrade：同一已驗證工作室。** 重用原入口、Agent ID、私人資料目錄及有效連線；本次已有升級工作才接續其 operation_id，新的來源／計劃另建升級工作。核對有效備份／還原後，使用固定新版及相容遷移，保留知識、對話、批准／撤銷、權限、設定、個人化與可恢復草稿。完整改版依[功能對應及保留契約](FEEDBACK_LOOP.md#固定產物更新同一實例)呈現新版，不凍結舊排版或清空資料重裝。重啟後的程序內 grant 按實際狀態及既有授權核對，未知結果不重送。
 
-這是安裝協調器須遵守的流程分流，不是目前 preflight 的新旗標。新目標需自己的 operation_id／journal；同一目標重試才接續原工作。現有登記 client 只處理宿主 Agent 設定，不會配置、隔離或搬移外部 runtime。缺少宿主 renderer、受限 API、目標綁定或獨立執行服務時仍為 requires_setup，不能因空白 manifest 已登記就聲稱新工作室可用。完整操作見 [INSTALL.md](INSTALL.md#新工作室與同工作室升級)。
+這是流程分流，不是目前 preflight 的新旗標或已完成的預覽協調器。新目標需自己的 operation_id／journal；同一目標重試才接續原工作。現有 client 處理宿主 Agent 登記、設定與已授權同 ID 套件升級，不會配置、隔離或搬移外部 runtime。缺少宿主 renderer、受限 API、目標綁定或獨立執行服務時仍為 requires_setup，不能因 manifest 已登記就聲稱工作室可用。完整操作見 [INSTALL.md](INSTALL.md#新工作室與同工作室升級)。
 
 ## 先選交付模式
 
@@ -130,14 +131,39 @@ const receipt = await installer.ensure({
 
 `authenticatedHostRequest(method, path, body?)` 是現有受信任宿主 client，回傳解析後的 JSON。`readAuthenticatedHostIdentity()` 必須從同一已驗證宿主身份取得 `{target_id, role}`，不能回傳使用者輸入或 preflight 檔案自行宣稱的身份。client 在任何修改前重新核對目標與 `inspection.plan.target_id` 相同、角色為 owner／admin；讀回前亦再次檢查。傳入 `ensure` 的角色字串不構成授權。兩個 callback 必須沿用同一真正登入、公司範圍、同源／請求驗證及正式 API 權限；不要把 owner token 注入前端或關閉伺服器驗證。client 只使用 `/api/studio/agents` 的分頁 GET／POST、單筆 GET 及帶 `expected_version` 的 PATCH。
 
-新目標首次登記只從明確提供的設定及 manifest 空白商戶預設開始，不讀取另一工作室或本機的知識／帳戶／渠道資料。首次登記後會 GET 同 ID，核對 manifest、來源及設定。期望設定獨立從原要求正規化並保留；不能只將讀回內容與 POST／PATCH 回應互相比較，避免伺服器忽略寫入卻誤報成功。重跑相同版本和來源沿用原 Agent，設定更新合併未指定欄位並用 CAS；不重新部署宿主。已有多個相同產品實例時停止要求核對。若已安裝的 manifest 版本或來源不同，回報 `HOST_PACKAGE_UPGRADE_REQUIRED`：目前公開宿主合約沒有原地替換 manifest 的 API，不能為更新偷偷新增第二張卡片。需要由宿主提供經審閱的升級流程，並保留歷史工作的固定快照。
+新目標首次登記只從明確提供的設定及 manifest 空白商戶預設開始，不讀取另一工作室或本機的知識／帳戶／渠道資料。首次登記後會 GET 同 ID，核對 manifest、來源及設定。期望設定獨立從原要求正規化並保留；不能只將讀回內容與 POST／PATCH 回應互相比較，避免伺服器忽略寫入卻誤報成功。重跑相同版本和來源沿用原 Agent，設定更新合併未指定欄位並用 CAS；不重新部署宿主。已有多個相同產品實例時停止要求核對。沒有明確升級參數而 manifest 版本或來源不同時，仍回報 `HOST_PACKAGE_UPGRADE_REQUIRED`，不能為更新偷偷新增第二張卡片。
+
+### 已授權的同 ID 套件升級
+
+原生宿主來源新增既有 `PATCH /api/studio/agents/{id}` 的套件升級分支；BlueSAI 透過以下顯式參數接駁。這是來源能力，須先確認指定宿主已支援並部署該合約；舊宿主或未適配 Sites 不因 client 更新而取得能力。下列變數由已授權的私人更新計劃提供：`selectedExistingAgentId` 是讀回的原 Agent ID，`savedOperationUpgradeKey` 是本次操作保存的固定 key，`sourceRevision` 是真實候選的完整 commit。不得每次重試另生 key，亦不得以虛構遠端 commit 登記未提交來源。
+
+```js
+const upgraded = await installer.ensure({
+  source: {
+    repository: 'https://github.com/collieai-g/BlueSAi-Cs-0001',
+    revision: sourceRevision,
+  },
+  expected_agent_id: selectedExistingAgentId,
+  upgrade_key: savedOperationUpgradeKey,
+  settings: { reply_tone: 'formal' },
+  inspection,
+});
+```
+
+`expected_agent_id` 與 `upgrade_key` 必須同時提供；key 只接受 1–100 個英數字、底線或連字號。指定 Agent 不存在、與實際結果不同或同產品有多個實例時拒絕，不進入 POST 新建。宿主只接受同 manifest ID、同來源 repository 及完整固定 revision；同一來源 pin 不能換 manifest 內容。client 在 PATCH 回應與最後獨立 GET 都核對原 ID，不跟隨伺服器回傳的替代 ID。
+
+升級 PATCH 同時提交 `manifest`、`source`、`upgrade_key`、當前 `expected_version` 及本次明確提供的部分 `settings`，不提交 `enabled`。宿主合併相容的舊設定並保留啟用狀態、連線及舊工作的固定快照；移除仍有保存值的設定、改共用欄位型別或合併後的值不再相容時拒絕，需另行設計遷移。可明確提供有效新值取代已移除的 select 選項；舊 optional 欄位從未保存值時可移除宣告。一般設定 PATCH 仍使用原本完整設定替換語意。
+
+同一 Agent 與 key 的原子收據綁定正規化的 manifest、source 和明確設定；CAS `expected_version` 不屬操作內容。同內容重試可讀回原成功快照，key 改內容回報衝突；之後 client 再 GET 當前狀態，獨立核對同 ID、來源、manifest、合併設定與原控制狀態，歷史收據不代替目前成功。網絡結果不明會交回呼叫方，不自動重送；先核對同一實例，需要明確重試時沿用原 key 與內容。舊宿主拒絕／忽略升級欄位時失敗，不回退為新建。
+
+此步只更新宿主的套件登錄，不下載或執行來源、不替換已部署的客服服務／資產，也不遷移個人化或保存頁面記憶體草稿。新版 UI 仍須完成[來源至實際載入的交付鏈](FEEDBACK_LOOP.md#元件來源與更新責任)；runtime、備份及草稿保護、模型與渠道驗收按 [UPDATE_AI.txt](../UPDATE_AI.txt) 分別完成。相容設定讀回不能代替以上驗收。
 
 ## 固定來源與生成 preview 發佈物
 
 提交並保持 checkout 乾淨後，使用**新的、倉庫外絕對目錄**：
 
 ```powershell
-npm run package:release -- --output C:\Private\bluesai-release-0.4.0-preview.1
+npm run package:release -- --output C:\Private\bluesai-release-0.4.0-preview.2
 ```
 
 產出 `source.tar` 及 `release.json`。後者保存完整來源 commit、套件版本、preview 標記、宿主合約參考、檔案 inventory SHA-256 及 tar SHA-256。雜湊以 Git commit 的實際 blob bytes 計算，不受 Windows 工作副本換行影響。已存在的輸出目錄、dirty checkout、倉庫內輸出或未經審閱的 symlink 會被拒絕。生成物不回寫到來源，因此沒有把自身 commit 寫回 manifest 的循環問題。
@@ -154,7 +180,7 @@ npm run package:release -- --output C:\Private\bluesai-release-0.4.0-preview.1
 | P0 可登記 manifest、固定來源與產物雜湊 | 已提供 standard 協作套件及生成工具；preview |
 | P0 共用安裝工作、備份 coverage、CAS／冪等 | 已提供 journal／client primitives；宿主協調器須接入 |
 | P0 去私人化 Sites 完整 UI／API 適配 | **未交付**通用可部署適配；僅提供 renderer/API 規格與明確阻擋 |
-| P1 升級及跨重啟保留 | 客服增量 migration、journal migration、CAS 與重啟測試；宿主 manifest 原地升級仍缺正式接口 |
+| P1 升級及跨重啟保留 | 客服增量 migration、journal migration、CAS；同 ID 套件升級 client 已接原生宿主 PATCH 合約並有合成測試，指定宿主部署／能力、runtime 及草稿保護仍須分別驗收 |
 | P1 發佈前共用驗證 | 已提供 fixture、Windows 清理、CAS／備份／重跑／產物測試和 CI |
 | P2 客人渠道垂直流程 | Node 網頁客服及 Evolution 共用核心；不等於已部署或真人收件 |
 | 私人工作室部署及完整現場驗收 | 本套件不執行；按已授權目標另行核對 |

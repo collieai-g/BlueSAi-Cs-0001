@@ -18,11 +18,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: npm test
       - run: npm run check
+      - run: npm run feedback:audit
+      - run: python -B -X utf8 -m unittest discover -s integrations/whatsapp-local/maintenance -p test_relink_auth.py -v
       - name: Verify pinned local WhatsApp bridge dependencies without starting an account
         run: npm ci --prefix integrations/whatsapp-local --ignore-scripts --omit=optional
       - name: Read-only contract fixture preflight

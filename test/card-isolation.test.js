@@ -11,6 +11,42 @@ import { createApp } from '../src/server.js';
 const CARD = '/api/agents/bluesai-cs-0001';
 const token = 'isolated-card-test-'.repeat(3);
 
+function assertCardStylesScoped(input){
+  const style=input.replace(/\/\*[\s\S]*?\*\//g,'');
+  // Frame selectors are valid only inside a namespaced, structurally complete
+  // animation. Strip those validated blocks before checking ordinary selectors.
+  const ordinary=style.replace(/@keyframes\s+([\w-]+)\s*\{((?:\s*[^{}]+\{[^{}]*\})+\s*)\}/g,(_block,name,frames)=>{
+    assert.match(name,/^bluesai-cs-[a-z0-9]+(?:-[a-z0-9]+)*$/,'animation name belongs to this product');
+    for(const frame of frames.matchAll(/([^{}]+)\{[^{}]*\}/g))for(const value of frame[1].split(',')){
+      const selector=value.trim();
+      if(selector==='from'||selector==='to')continue;
+      assert.match(selector,/^(?:\d+(?:\.\d+)?|\.\d+)%$/,'keyframe selector is a percentage, from or to');
+      const percentage=Number(selector.slice(0,-1));
+      assert.ok(percentage>=0&&percentage<=100,'keyframe percentage stays within its animation');
+    }
+    return '';
+  });
+  assert.doesNotMatch(ordinary,/@(?:-[\w]+-)?keyframes\b/,'unsupported or incomplete keyframes fail closed');
+  for(const selectors of ordinary.matchAll(/(?:^|(?<=[{}]))\s*([^{}]+)\{/g)){
+    if(selectors[1].startsWith('@'))continue;
+    for(const selector of selectors[1].split(','))assert.match(selector.trim(),/^#cs-card-design(?:\s|[.#:[>+~]|$)/);
+  }
+}
+
+test('CSS scope validation admits only product animations with valid frame selectors',()=>{
+  assert.doesNotThrow(()=>assertCardStylesScoped('#cs-card-design .light{color:green}@keyframes bluesai-cs-synthetic{from{opacity:1}50%,100%{opacity:.5}to{opacity:1}}'));
+  for(const css of [
+    '@keyframes shared-animation{from{opacity:1}to{opacity:0}}',
+    '@keyframes bluesai-cs-synthetic{body{opacity:1}}',
+    '@keyframes bluesai-cs-synthetic{101%{opacity:1}}',
+    '@keyframes bluesai-cs-synthetic{-1%{opacity:1}}',
+    '@keyframes bluesai-cs-synthetic{from{.host{color:red}}}',
+    '@media(min-width:1px){body{color:red}}',
+    '50%{opacity:1}',
+    '#cs-card-design .safe{color:green}.host{color:red}',
+  ])assert.throws(()=>assertCardStylesScoped(css),undefined,css);
+});
+
 async function fixture(t) {
   const store = new Store(':memory:');
   // An offline, unstarted engine exercises local routes without any provider or phone.
@@ -49,7 +85,8 @@ test('default URL and former console URL open the single card without a cloned h
   assert.match(html, /data-screen="list"/);
   assert.match(html, /data-screen="config"/);
   assert.match(html, /data-open-whatsapp/);
-  assert.doesNotMatch(html, /<(?:nav|aside)\b|class="[^"]*\b(?:bp-window|bp-side|bp-top)\b/);
+  // A semantic nav inside this card is allowed; the Studio's outer shell is not.
+  assert.doesNotMatch(html, /class="[^"]*\b(?:bp-window|bp-side|bp-top)\b/);
   const old = await fetch(base + '/console', { redirect: 'manual' });
   assert.equal(old.status, 303);
   assert.equal(old.headers.get('location'), '/workbench.html');
@@ -130,26 +167,23 @@ test('card source scopes styling, icons and API access without host navigation o
     assert.doesNotMatch(value, /(?:setWidgetState|openai:set_globals|window\.csBackend)/);
     assert.doesNotMatch(value, /['"]\/api\/(?:state|profile|settings|knowledge|conversations|messages|workbench)(?:[/'"]|$)/);
   }
-  assert.doesNotMatch(source + html, /<(?:nav|aside)\b|class="[^"]*\b(?:bp-window|bp-side|bp-top)\b/);
+  assert.doesNotMatch(source + html, /class="[^"]*\b(?:bp-window|bp-side|bp-top)\b/);
   assert.match(api, /const BASE=['"]\/api\/agents\/bluesai-cs-0001['"]/);
   assert.match(api, /fetch\(BASE\+path/);
   assert.match(js, /cardRoot\.querySelectorAll\('\[data-lucide\]'\)/);
   assert.doesNotMatch(js, /document\.querySelectorAll\(/);
-  const style = source.match(/<style>([\s\S]*?)<\/style>/)[1];
-  for (const selectors of style.matchAll(/(?:^|[{}])\s*([^{}]+)\{/g)) {
-    if (selectors[1].startsWith('@')) continue;
-    for (const selector of selectors[1].split(',')) assert.match(selector.trim(), /^#cs-card-design(?:\s|[.#:[>+~]|$)/);
-  }
+  assertCardStylesScoped(source.match(/<style>([\s\S]*?)<\/style>/)[1]);
 });
 
 test('component export and asset allowlist exclude standalone login, global CSS and diagnostic shells', async () => {
-  const source = await readFile(new URL('../design/customer-agent-card-design.html', import.meta.url), 'utf8');
-  const component = await readFile(new URL('../public/agent-card.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('../public/agent-card.css', import.meta.url), 'utf8');
+  // Match Python's universal-newline source and generated-asset reads, retaining full-content comparisons.
+  const source = (await readFile(new URL('../design/customer-agent-card-design.html', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const component = (await readFile(new URL('../public/agent-card.html', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const css = (await readFile(new URL('../public/agent-card.css', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
   const manifest = JSON.parse(await readFile(new URL('../integrations/blueprint/card-ui.json', import.meta.url), 'utf8'));
   assert.equal(component, source.replace(/<(?:style|script)>[\s\S]*?<\/(?:style|script)>/g, '')
     .replace(/^[ \t]+$/gm, '').replace('id="cs-card-design"', 'id="cs-card-design" hidden'));
-  assert.doesNotMatch(component, /<!doctype|<(?:html|head|body|style|script|nav|aside)\b|data-local-login|local-login/i);
+  assert.doesNotMatch(component, /<!doctype|<(?:html|head|body|style|script)\b|data-local-login|local-login/i);
   assert.equal([...component.matchAll(/id="cs-card-design"/g)].length, 1);
   assert.equal(css, source.match(/<style>([\s\S]*?)<\/style>/)[1].replace(/^[ \t]+$/gm, ''));
   assert.doesNotMatch(css, /(?:^|[{},])\s*(?:body|html|:root|\.local-login)(?:[\s.#:[>{,]|$)/m);
@@ -170,4 +204,20 @@ test('component export and asset allowlist exclude standalone login, global CSS 
     assert.ok(!manifest.forbidden_host_bundle_assets.includes(asset));
     assert.ok((await readFile(new URL('../' + asset, import.meta.url), 'utf8')).length > 0, asset);
   }
+});
+
+
+test('expanded card keeps a ratio frame and both working regions at every width',async()=>{
+  const source=await readFile(new URL('../design/customer-agent-card-design.html',import.meta.url),'utf8');
+  const style=source.match(/<style>([\s\S]*?)<\/style>/)[1];
+  assert.match(style,/\.bp-config-card\{[^}]*aspect-ratio:4\/3/);
+  assert.match(style,/grid-template-columns:clamp\(176px,28%,288px\) minmax\(0,1fr\)/);
+  assert.match(style,/grid-template-columns:clamp\(144px,20%,208px\) minmax\(0,1fr\)/);
+  assert.match(style,/\[data-screen="config"\]\{[^}]*min-width:576px/);
+  assert.doesNotMatch(style,/(?:100(?:d|s|l)?vh|data-mobile-pane|\.bp-management-workspace\{display:flex;flex-direction:column)/);
+  assert.doesNotMatch(source,/mobileList|data-queue-back|data-mobile-pane/);
+  const nativeCss=await readFile(new URL('../integrations/blueprint/native/host-bounds.css',import.meta.url),'utf8');
+  assert.match(nativeCss,/\.bluesai-native-card\[data-bluesai-mode="expanded"\] #cs-card-design \.bp-card-surface\{[^}]*padding:0/,
+    'native frame clears host main padding inside its own expanded card only');
+  assertCardStylesScoped(style);
 });
